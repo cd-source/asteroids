@@ -5,33 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Asteroids</title>
 
-  <!-- Fonts (local first; fall back to system monospace if missing) -->
-  <style>
-    @font-face {
-      font-family: "SpaceGrotesk";
-      src: url("assets/fonts/space-grotesk.woff2") format("woff2");
-      font-display: swap;
-    }
-    @font-face {
-      font-family: "Orbitron";
-      src: url("assets/fonts/orbitron.woff2") format("woff2");
-      font-display: swap;
-    }
-  </style>
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
 
-  <!-- Performance: preconnect is not needed for local assets; we use preload instead -->
-  <!-- Image preloads (safe even if assets are added later) -->
-  <link rel="preload" as="image" href="assets/img/backgrounds/space-base.jpg" />
-  <link rel="preload" as="image" href="assets/img/backgrounds/nebula-01.png" />
-  <link rel="preload" as="image" href="assets/img/backgrounds/stars-01.png" />
+  <!-- Image preloads for critical assets -->
+  <link rel="preload" as="image" href="assets/img/backgrounds/space-base.png" />
+  <link rel="preload" as="image" href="assets/img/sprites/ship/ship-idle.png" />
+  <link rel="preload" as="image" href="assets/img/sprites/vfx/explosion-sheet.png" />
   <link rel="preload" as="image" href="assets/img/overlays/vignette.png" />
-  <link rel="preload" as="image" href="assets/img/overlays/film-grain.png" />
-
-  <!-- Audio preloads (optional; comment out if you don't want early audio fetching) -->
-  <link rel="preload" as="audio" href="assets/audio/sfx/laser-01.ogg" />
-  <link rel="preload" as="audio" href="assets/audio/sfx/explosion-small-01.ogg" />
-  <link rel="preload" as="audio" href="assets/audio/sfx/explosion-big-01.ogg" />
-  <link rel="preload" as="audio" href="assets/audio/music/loop-main.ogg" />
 
   <style>
     :root{
@@ -55,7 +38,7 @@
       display: grid;
       place-items: center;
       color: var(--text);
-      font-family: SpaceGrotesk, "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-family: "Space Grotesk", "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
 
     /* Wrapper lets us position UI + overlays relative to canvas */
@@ -115,7 +98,7 @@
     }
 
     .pill b {
-      font-family: Orbitron, SpaceGrotesk, ui-monospace, monospace;
+      font-family: Orbitron, "Space Grotesk", ui-monospace, monospace;
       font-size: 14px;
       letter-spacing: 0.08em;
     }
@@ -169,7 +152,7 @@
     }
 
     #message h1 {
-      font-family: Orbitron, SpaceGrotesk, ui-monospace, monospace;
+      font-family: Orbitron, "Space Grotesk", ui-monospace, monospace;
       font-size: clamp(34px, 4vw, 56px);
       letter-spacing: 0.10em;
       text-transform: uppercase;
@@ -249,6 +232,7 @@
     <div id="message" class="visible">
       <div class="card">
         <h1>Asteroids</h1>
+        <p id="highscoreDisplay" style="color: #78fff5; font-family: Orbitron, monospace; letter-spacing: 0.1em;"></p>
         <p>Arrow Keys or WASD to move</p>
         <p>Space to shoot</p>
         <div class="hint-row">
@@ -276,6 +260,10 @@
       function setSound(on) {
         window.__ASTEROIDS_SOUND_ON__ = on;
         btnMute.textContent = "Sound: " + (on ? "On" : "Off");
+        // Stop any playing sounds when muting
+        if (!on && typeof stopThrust === 'function') {
+          stopThrust();
+        }
       }
 
       btnMute?.addEventListener("click", () => setSound(!window.__ASTEROIDS_SOUND_ON__));
@@ -291,11 +279,12 @@
       // Keyboard shortcuts
       window.addEventListener("keydown", (e) => {
         if (e.key === "m" || e.key === "M") setSound(!window.__ASTEROIDS_SOUND_ON__);
-        if (e.key === "r" || e.key === "R") {
-          window.dispatchEvent(new Event("asteroids:reset"));
-          location.reload();
-        }
       });
+
+      // Show high score on start screen
+      const hs = parseInt(localStorage.getItem("asteroids-highscore")) || 0;
+      const hsEl = document.getElementById("highscoreDisplay");
+      if (hs > 0 && hsEl) hsEl.textContent = "BEST: " + hs;
     })();
   </script>
 
