@@ -198,11 +198,7 @@
       mix-blend-mode: multiply;
       opacity: 0.55;
     }
-    .overlay.grain {
-      background: url("assets/img/overlays/film-grain.png") 0 0/512px 512px repeat;
-      opacity: 0.10;
-      mix-blend-mode: overlay;
-    }
+    /* grain overlay disabled — asset not yet generated */
 
     /* Mobile adjustments */
     @media (max-width: 520px){
@@ -236,7 +232,7 @@
         <p>Arrow Keys or WASD to move</p>
         <p>Space to shoot</p>
         <div class="hint-row">
-          <span class="hint">Enter: Start</span>
+          <span class="hint">Enter / Space / Click: Start</span>
           <span class="hint">M: Mute</span>
           <span class="hint">R: Reset</span>
         </div>
@@ -244,7 +240,7 @@
     </div>
 
     <div class="overlay vignette" aria-hidden="true"></div>
-    <div class="overlay grain" aria-hidden="true"></div>
+    <!-- grain overlay removed: asset not generated yet -->
   </div>
 
   <script>

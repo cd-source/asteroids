@@ -25,11 +25,6 @@ resizeCanvas();
 // ── Asset Loader ─────────────────────────────────────────────
 const ASSETS = {};
 const ASSET_LIST = {
-    // Backgrounds
-    'bg-space':        'assets/img/backgrounds/space-base.png',
-    'bg-nebula':       'assets/img/backgrounds/nebula-layer.png',
-    'bg-stars-bright': 'assets/img/backgrounds/stars-bright.png',
-    'bg-stars-dense':  'assets/img/backgrounds/stars-dense.png',
     // Overlays
     'overlay-vignette': 'assets/img/overlays/vignette.png',
     // Ship
@@ -164,17 +159,48 @@ let invincibleTimer = 0;
 let screenShake = 0;
 let frameCount = 0;
 
+// Leaderboard
+let leaderboard = JSON.parse(localStorage.getItem('asteroids-leaderboard') || '[]');
+let enteringName = false;
+let playerName = '';
+let nameSubmitted = false;
+let nameCursorBlink = 0;
+
 // Level transition
 let levelTransition = false;
 let levelTransitionTimer = 0;
 let levelTransitionText = '';
 
-// Parallax offsets
-const parallax = {
-    dense:  { x: 0, y: 0 },
-    bright: { x: 0, y: 0 },
-    nebula: { x: 0, y: 0 },
-};
+// Per-level color palette — cycles through distinct environments
+const LEVEL_PALETTES = [
+    { name: 'Cyan Nebula',     tint: null,              starColor: '#FFFFFF', uiAccent: '#78fff5' }, // Level 1: default (no tint)
+    { name: 'Ember Field',     tint: 'rgba(255,100,30,0.25)',  starColor: '#FFD4B0', uiAccent: '#FF8844' }, // Level 2: warm orange
+    { name: 'Toxic Zone',      tint: 'rgba(80,255,60,0.25)',   starColor: '#B0FFB0', uiAccent: '#66FF44' }, // Level 3: green
+    { name: 'Void Rift',       tint: 'rgba(160,80,255,0.25)',  starColor: '#D4B0FF', uiAccent: '#AA66FF' }, // Level 4: purple
+    { name: 'Blood Moon',      tint: 'rgba(255,40,40,0.2)',    starColor: '#FFB0B0', uiAccent: '#FF4444' }, // Level 5: red
+    { name: 'Deep Freeze',     tint: 'rgba(40,140,255,0.25)',  starColor: '#B0D4FF', uiAccent: '#4488FF' }, // Level 6: blue
+    { name: 'Solar Flare',     tint: 'rgba(255,220,40,0.2)',   starColor: '#FFFFD0', uiAccent: '#FFDD44' }, // Level 7: yellow
+    { name: 'Ghost Sector',    tint: 'rgba(255,255,255,0.15)', starColor: '#E0E0E0', uiAccent: '#CCCCCC' }, // Level 8: white/grey
+];
+
+function getLevelPalette() {
+    return LEVEL_PALETTES[(level - 1) % LEVEL_PALETTES.length];
+}
+
+// Static star field (classic Asteroids style)
+const STARS = [];
+function generateStars() {
+    STARS.length = 0;
+    const cW = W();
+    const cH = H();
+    for (let i = 0; i < 120; i++) {
+        STARS.push({
+            x: Math.random() * cW,
+            y: Math.random() * cH,
+            size: Math.random() < 0.85 ? 1 : 2
+        });
+    }
+}
 
 // ── Audio ────────────────────────────────────────────────────
 const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
@@ -189,21 +215,38 @@ function initAudio() {
 
 function playLaser() {
     if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(220, audioCtx.currentTime + 0.12);
-    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
-    osc.start(audioCtx.currentTime);
-    osc.stop(audioCtx.currentTime + 0.12);
+    const t = audioCtx.currentTime;
+    // Main zap — triangle wave for a crisper bite
+    const osc1 = audioCtx.createOscillator();
+    const g1 = audioCtx.createGain();
+    osc1.type = 'triangle';
+    osc1.connect(g1);
+    g1.connect(audioCtx.destination);
+    osc1.frequency.setValueAtTime(1200, t);
+    osc1.frequency.exponentialRampToValueAtTime(150, t + 0.1);
+    g1.gain.setValueAtTime(0.18, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    osc1.start(t);
+    osc1.stop(t + 0.1);
+    // High harmonic snap
+    const osc2 = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    osc2.type = 'square';
+    osc2.connect(g2);
+    g2.connect(audioCtx.destination);
+    osc2.frequency.setValueAtTime(2400, t);
+    osc2.frequency.exponentialRampToValueAtTime(400, t + 0.06);
+    g2.gain.setValueAtTime(0.06, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    osc2.start(t);
+    osc2.stop(t + 0.06);
 }
 
 function playExplosion(large = false) {
     if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
-    const dur = large ? 0.5 : 0.25;
+    const t = audioCtx.currentTime;
+    const dur = large ? 0.6 : 0.3;
+    // Layer 1: Filtered white noise (rumble/crackle)
     const bufSz = audioCtx.sampleRate * dur;
     const buf = audioCtx.createBuffer(1, bufSz, audioCtx.sampleRate);
     const data = buf.getChannelData(0);
@@ -212,47 +255,128 @@ function playExplosion(large = false) {
     src.buffer = buf;
     const flt = audioCtx.createBiquadFilter();
     flt.type = 'lowpass';
-    flt.frequency.setValueAtTime(large ? 250 : 700, audioCtx.currentTime);
-    flt.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + dur);
-    const gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(large ? 0.45 : 0.25, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    flt.frequency.setValueAtTime(large ? 400 : 900, t);
+    flt.frequency.exponentialRampToValueAtTime(40, t + dur);
+    const g1 = audioCtx.createGain();
+    g1.gain.setValueAtTime(large ? 0.35 : 0.2, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + dur);
     src.connect(flt);
-    flt.connect(gain);
-    gain.connect(audioCtx.destination);
-    src.start(audioCtx.currentTime);
-    src.stop(audioCtx.currentTime + dur);
+    flt.connect(g1);
+    g1.connect(audioCtx.destination);
+    src.start(t);
+    src.stop(t + dur);
+    // Layer 2: Low thud (sine punch for bass impact)
+    const osc = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.connect(g2);
+    g2.connect(audioCtx.destination);
+    osc.frequency.setValueAtTime(large ? 80 : 120, t);
+    osc.frequency.exponentialRampToValueAtTime(30, t + dur * 0.6);
+    g2.gain.setValueAtTime(large ? 0.4 : 0.2, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.6);
+    osc.start(t);
+    osc.stop(t + dur * 0.6);
 }
 
 function playLevelUp() {
     if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
     const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6
     notes.forEach((freq, i) => {
+        // Main tone
         const osc = audioCtx.createOscillator();
         const gain = audioCtx.createGain();
         osc.type = 'sine';
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0, audioCtx.currentTime + i * 0.1);
-        gain.gain.linearRampToValueAtTime(0.15, audioCtx.currentTime + i * 0.1 + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.1 + 0.3);
-        osc.start(audioCtx.currentTime + i * 0.1);
-        osc.stop(audioCtx.currentTime + i * 0.1 + 0.3);
+        osc.frequency.setValueAtTime(freq, t);
+        gain.gain.setValueAtTime(0, t + i * 0.12);
+        gain.gain.linearRampToValueAtTime(0.12, t + i * 0.12 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.35);
+        osc.start(t + i * 0.12);
+        osc.stop(t + i * 0.12 + 0.35);
+        // Octave shimmer
+        const osc2 = audioCtx.createOscillator();
+        const g2 = audioCtx.createGain();
+        osc2.type = 'triangle';
+        osc2.connect(g2);
+        g2.connect(audioCtx.destination);
+        osc2.frequency.setValueAtTime(freq * 2, t);
+        g2.gain.setValueAtTime(0, t + i * 0.12);
+        g2.gain.linearRampToValueAtTime(0.04, t + i * 0.12 + 0.02);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.25);
+        osc2.start(t + i * 0.12);
+        osc2.stop(t + i * 0.12 + 0.25);
     });
+}
+
+function playShipDeath() {
+    if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
+    // Descending tone — dramatic pitch drop
+    const osc = audioCtx.createOscillator();
+    const g1 = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.connect(g1);
+    g1.connect(audioCtx.destination);
+    osc.frequency.setValueAtTime(600, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.8);
+    g1.gain.setValueAtTime(0.25, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+    osc.start(t);
+    osc.stop(t + 0.8);
+    // Heavy noise burst
+    const dur = 0.6;
+    const bufSz = audioCtx.sampleRate * dur;
+    const buf = audioCtx.createBuffer(1, bufSz, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSz; i++) data[i] = Math.random() * 2 - 1;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const flt = audioCtx.createBiquadFilter();
+    flt.type = 'lowpass';
+    flt.frequency.setValueAtTime(500, t);
+    flt.frequency.exponentialRampToValueAtTime(30, t + dur);
+    const g2 = audioCtx.createGain();
+    g2.gain.setValueAtTime(0.4, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(flt);
+    flt.connect(g2);
+    g2.connect(audioCtx.destination);
+    src.start(t);
+    src.stop(t + dur);
 }
 
 function startThrust() {
     if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx || thrustOscillator) return;
+    const t = audioCtx.currentTime;
+    // Low rumble oscillator
     thrustOscillator = audioCtx.createOscillator();
-    thrustGain = audioCtx.createGain();
     thrustOscillator.type = 'sawtooth';
-    thrustOscillator.frequency.setValueAtTime(80, audioCtx.currentTime);
-    thrustGain.gain.setValueAtTime(0, audioCtx.currentTime);
-    thrustGain.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + 0.05);
-    thrustOscillator.connect(thrustGain);
+    thrustOscillator.frequency.setValueAtTime(55, t);
+    // Add noise texture via waveshaper for gritty engine sound
+    const shaper = audioCtx.createWaveShaper();
+    const curve = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+        const x = (i / 128) - 1;
+        curve[i] = Math.tanh(x * 2.5);
+    }
+    shaper.curve = curve;
+    shaper.oversample = '2x';
+    // Bandpass to keep it rumbly, not harsh
+    const bpf = audioCtx.createBiquadFilter();
+    bpf.type = 'bandpass';
+    bpf.frequency.setValueAtTime(120, t);
+    bpf.Q.setValueAtTime(1.5, t);
+    thrustGain = audioCtx.createGain();
+    thrustGain.gain.setValueAtTime(0, t);
+    thrustGain.gain.linearRampToValueAtTime(0.15, t + 0.08);
+    thrustOscillator.connect(shaper);
+    shaper.connect(bpf);
+    bpf.connect(thrustGain);
     thrustGain.connect(audioCtx.destination);
-    thrustOscillator.start(audioCtx.currentTime);
+    thrustOscillator.start(t);
 }
 
 function stopThrust() {
@@ -336,7 +460,7 @@ class Ship {
         this.y = H() / 2;
         this.angle = -Math.PI / 2;
         this.velocity = { x: 0, y: 0 };
-        this.radius = S(15);
+        this.radius = S(12);
         this.thrust = false;
         this.shootCooldown = 0;
         this.thrustFrame = 0;
@@ -345,28 +469,17 @@ class Ship {
     draw() {
         const size = S(52);
 
-        // Shadow
-        if (ASSETS['ship-shadow']) {
-            drawSpriteAdditive(ASSETS['ship-shadow'], this.x + S(3), this.y + S(3),
-                size * 1.1, size * 1.1, this.angle + Math.PI / 2, 0.25);
-        }
-
-        // Choose sprite
-        let spriteKey = 'ship-idle';
-        if (this.thrust) {
-            this.thrustFrame = (this.thrustFrame + 0.15) % 2;
-            spriteKey = this.thrustFrame < 1 ? 'ship-thrust-1' : 'ship-thrust-2';
-        }
-
         // Invincibility flash
         let alpha = 1;
         if (invincible && Math.floor(Date.now() / 100) % 2 === 0) {
             alpha = 0.35;
-            spriteKey = 'ship-flash';
         }
 
-        const img = ASSETS[spriteKey];
+        // Always use ship-idle — thrust sprites have baked-in flame that
+        // covers the particle exhaust. Particles handle the thrust visual.
+        const img = ASSETS['ship-idle'];
         if (img) {
+            // Additive blend makes the black PNG background invisible
             drawSpriteAdditive(img, this.x, this.y, size, size, this.angle + Math.PI / 2, alpha);
         } else {
             this.drawFallback(alpha);
@@ -415,15 +528,19 @@ class Ship {
             this.velocity.y += Math.sin(this.angle) * accel;
             if (!wasThrusting) startThrust();
 
-            // Thrust particles
-            if (Math.random() > 0.4) {
-                const pa = this.angle + Math.PI + (Math.random() - 0.5) * 0.5;
+            // Thrust particles — emit 2-3 per frame for a dense exhaust stream
+            const numP = 2 + (Math.random() > 0.5 ? 1 : 0);
+            for (let i = 0; i < numP; i++) {
+                const spread = (Math.random() - 0.5) * 0.6;
+                const pa = this.angle + Math.PI + spread;
+                const spd = S(1.5 + Math.random() * 2.5);
+                const ox = (Math.random() - 0.5) * S(4); // lateral scatter
                 particles.push(new Particle(
-                    this.x - Math.cos(this.angle) * S(12),
-                    this.y - Math.sin(this.angle) * S(12),
-                    Math.cos(pa) * S(2 + Math.random() * 2),
-                    Math.sin(pa) * S(2 + Math.random() * 2),
-                    'thrust', 18
+                    this.x - Math.cos(this.angle) * S(14) + Math.cos(this.angle + Math.PI/2) * ox,
+                    this.y - Math.sin(this.angle) * S(14) + Math.sin(this.angle + Math.PI/2) * ox,
+                    Math.cos(pa) * spd,
+                    Math.sin(pa) * spd,
+                    'thrust', 14 + Math.floor(Math.random() * 10)
                 ));
             }
         } else if (wasThrusting) {
@@ -475,25 +592,42 @@ class Asteroid {
         this.x = x;
         this.y = y;
         this.size = size; // 3=large, 2=medium, 1=small
-        this.radius = S(size * 15);
+        this.radius = S(size === 3 ? 45 : size === 2 ? 30 : 28);
         const angle = Math.random() * Math.PI * 2;
-        const speed = S((4 - size) * 0.5 + Math.random());
+        // Speed scales with level: +12% per level, capped at 3x base speed
+        const levelSpeedMult = Math.min(3, 1 + (level - 1) * 0.12);
+        const baseSpeed = (4 - size) * 0.5 + Math.random();
+        const speed = S(baseSpeed * levelSpeedMult);
         this.velocity = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
         this.rotation = Math.random() * Math.PI * 2;
-        this.rotationSpeed = (Math.random() - 0.5) * 0.03;
+        // Rotation also increases with level for more visual chaos
+        this.rotationSpeed = (Math.random() - 0.5) * (0.03 + level * 0.003);
 
         // Random variant 1-6
         this.variant = Math.floor(Math.random() * 6) + 1;
         const prefix = size === 3 ? 'l' : size === 2 ? 'm' : 's';
         this.spriteKey = `asteroid-${prefix}${this.variant}`;
 
-        this.drawSize = S(size === 3 ? 85 : size === 2 ? 58 : 38);
+        this.drawSize = S(size === 3 ? 90 : size === 2 ? 65 : 60);
     }
 
     draw() {
         const img = ASSETS[this.spriteKey];
         if (img) {
             drawSpriteAdditive(img, this.x, this.y, this.drawSize, this.drawSize, this.rotation);
+            // Apply level color tint over the asteroid
+            const palette = getLevelPalette();
+            if (palette.tint) {
+                ctx.save();
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.fillStyle = palette.tint;
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.beginPath();
+                ctx.arc(0, 0, this.drawSize * 0.38, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
         } else {
             ctx.save();
             ctx.translate(this.x, this.y);
@@ -581,20 +715,40 @@ class Particle {
         const t = this.life / this.maxLife;
         const sz = this.type === 'spark' ? S(10) : S(8);
 
-        if (this.type === 'thrust' && ASSETS['particle-soft']) {
-            drawSpriteAdditive(ASSETS['particle-soft'], this.x, this.y, sz * 2, sz * 2, 0, t * 0.7);
-        } else if (this.type === 'spark' && ASSETS['particle-spark']) {
-            drawSpriteAdditive(ASSETS['particle-spark'], this.x, this.y, sz * 2, sz * 2, Math.random() * Math.PI, t);
-        } else if (this.type === 'explosion' && ASSETS['particle-soft']) {
-            drawSpriteAdditive(ASSETS['particle-soft'], this.x, this.y, sz * 2.5, sz * 2.5, 0, t * 0.8);
-        } else {
-            ctx.globalAlpha = t;
-            ctx.fillStyle = this.type === 'thrust' ? '#FFA500' : '#FFD700';
+        ctx.save();
+        if (this.type === 'thrust') {
+            // Hot exhaust particles: white core → orange → dim red
+            const r = S(1.5 + 2 * t);
+            ctx.globalAlpha = t * 0.9;
+            // Outer glow
+            ctx.fillStyle = t > 0.6 ? '#FFA500' : t > 0.3 ? '#FF6600' : '#882200';
             ctx.beginPath();
-            ctx.arc(this.x, this.y, S(2), 0, Math.PI * 2);
+            ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
             ctx.fill();
-            ctx.globalAlpha = 1;
+            // Hot white core on fresh particles
+            if (t > 0.7) {
+                ctx.globalAlpha = (t - 0.7) * 3;
+                ctx.fillStyle = '#FFEECC';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, r * 0.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        } else if (this.type === 'explosion') {
+            const r = S(1 + 2.5 * t);
+            ctx.globalAlpha = t * 0.85;
+            ctx.fillStyle = t > 0.5 ? '#FFD700' : t > 0.2 ? '#FF6600' : '#661100';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            // spark
+            ctx.globalAlpha = t;
+            ctx.fillStyle = '#FFD700';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, S(1.5), 0, Math.PI * 2);
+            ctx.fill();
         }
+        ctx.restore();
     }
 
     update() {
@@ -606,40 +760,71 @@ class Particle {
     }
 }
 
-// ── Explosion (spritesheet) ──────────────────────────────────
+// ── Explosion (particle burst) ───────────────────────────────
 class Explosion {
     constructor(x, y, size) {
         this.x = x;
         this.y = y;
-        this.size = size;
-        this.frame = 0;
-        this.totalFrames = 64; // 8×8 grid
-        this.speed = 0.7;
         this.done = false;
+        this.particles = [];
+        // Scale particle count and speed by explosion size
+        const count = Math.floor(size / S(3));
+        const maxSpeed = size / S(12);
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = S(0.5) + Math.random() * maxSpeed;
+            const life = 25 + Math.random() * 30;
+            this.particles.push({
+                x: x, y: y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: life,
+                maxLife: life,
+                radius: S(1 + Math.random() * 2.5),
+                bright: Math.random() < 0.3, // some particles glow brighter
+            });
+        }
     }
 
     draw() {
-        const sheet = ASSETS['explosion-sheet'];
-        if (!sheet) return;
-
-        const col = Math.floor(this.frame) % 8;
-        const row = Math.floor(Math.floor(this.frame) / 8);
-        const fw = sheet.width / 8;
-        const fh = sheet.height / 8;
-
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.drawImage(sheet,
-            col * fw, row * fh, fw, fh,
-            this.x - this.size / 2, this.y - this.size / 2,
-            this.size, this.size
-        );
-        ctx.restore();
+        for (const p of this.particles) {
+            if (p.life <= 0) continue;
+            const t = p.life / p.maxLife;
+            // Color: white → yellow → orange → dim red as it fades
+            let r, g, b;
+            if (t > 0.7) { r = 255; g = 255; b = 200 + Math.floor(55 * ((t - 0.7) / 0.3)); }
+            else if (t > 0.4) { r = 255; g = Math.floor(180 + 75 * ((t - 0.4) / 0.3)); b = 50; }
+            else { r = 200 + Math.floor(55 * (t / 0.4)); g = Math.floor(80 * (t / 0.4)); b = 20; }
+            const alpha = Math.min(1, t * 1.5);
+            const sz = p.radius * (0.3 + t * 0.7);
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
+            ctx.fill();
+            // Bright particles get a glow halo
+            if (p.bright && t > 0.3) {
+                ctx.globalAlpha = alpha * 0.3;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, sz * 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        ctx.globalAlpha = 1;
     }
 
     update() {
-        this.frame += this.speed;
-        if (this.frame >= this.totalFrames) this.done = true;
+        let alive = false;
+        for (const p of this.particles) {
+            if (p.life <= 0) continue;
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vx *= 0.97;
+            p.vy *= 0.97;
+            p.life--;
+            if (p.life > 0) alive = true;
+        }
+        this.done = !alive;
     }
 }
 
@@ -654,10 +839,15 @@ class Shockwave {
     }
 
     draw() {
-        const img = ASSETS['shockwave-ring'];
-        if (!img) return;
-        const s = this.scale * S(130);
-        drawSpriteAdditive(img, this.x, this.y, s, s, 0, this.alpha);
+        const r = this.scale * S(65);
+        ctx.save();
+        ctx.globalAlpha = this.alpha * 0.6;
+        ctx.strokeStyle = '#FFA500';
+        ctx.lineWidth = S(2) * this.alpha;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
     }
 
     update() {
@@ -695,6 +885,22 @@ class SmokePuff {
     }
 }
 
+// ── Leaderboard ─────────────────────────────────────────────
+function saveToLeaderboard(name, finalScore, finalLevel) {
+    leaderboard.push({ name: name.toUpperCase(), score: finalScore, level: finalLevel, date: Date.now() });
+    leaderboard.sort((a, b) => b.score - a.score);
+    leaderboard = leaderboard.slice(0, 10); // keep top 10
+    localStorage.setItem('asteroids-leaderboard', JSON.stringify(leaderboard));
+}
+
+function getLeaderboardRank(finalScore) {
+    if (leaderboard.length < 10) return leaderboard.length + 1;
+    for (let i = 0; i < leaderboard.length; i++) {
+        if (finalScore > leaderboard[i].score) return i + 1;
+    }
+    return leaderboard.length < 10 ? leaderboard.length + 1 : -1;
+}
+
 // ── Initialize ───────────────────────────────────────────────
 function init() {
     initAudio();
@@ -716,6 +922,9 @@ function init() {
     screenShake = 0;
     levelTransition = false;
     levelTransitionTimer = 0;
+    enteringName = false;
+    playerName = '';
+    nameSubmitted = false;
     messageEl.classList.remove('visible');
     spawnAsteroids(4);
     updateUI();
@@ -748,14 +957,8 @@ function checkCollisions() {
                 explosions.push(new Explosion(ax, ay, expSize));
                 shockwaves.push(new Shockwave(ax, ay));
 
-                // Particles
-                for (let k = 0; k < 14; k++) {
-                    const a = Math.random() * Math.PI * 2;
-                    const s = S(1 + Math.random() * 3);
-                    particles.push(new Particle(ax, ay,
-                        Math.cos(a) * s, Math.sin(a) * s, 'explosion', 28));
-                }
-                for (let k = 0; k < 6; k++) {
+                // A few extra sparks for accent
+                for (let k = 0; k < 4; k++) {
                     const a = Math.random() * Math.PI * 2;
                     const s = S(2 + Math.random() * 4);
                     particles.push(new Particle(ax, ay,
@@ -790,23 +993,23 @@ function checkCollisions() {
                 shockwaves.push(new Shockwave(ship.x, ship.y));
                 screenShake = S(14);
 
-                // Sparks + smoke
-                for (let k = 0; k < 30; k++) {
+                // A few extra sparks
+                for (let k = 0; k < 6; k++) {
                     const a = Math.random() * Math.PI * 2;
-                    const s = S(1 + Math.random() * 4);
+                    const s = S(2 + Math.random() * 5);
                     particles.push(new Particle(ship.x, ship.y,
-                        Math.cos(a) * s, Math.sin(a) * s, 'spark', 40));
-                }
-                for (let k = 0; k < 4; k++) {
-                    particles.push(new SmokePuff(ship.x, ship.y));
+                        Math.cos(a) * s, Math.sin(a) * s, 'spark', 30));
                 }
 
-                playExplosion(true);
+                playShipDeath();
                 stopThrust();
                 lives--;
 
                 if (lives <= 0) {
                     gameOver = true;
+                    enteringName = true;
+                    nameSubmitted = false;
+                    playerName = '';
                     if (score > highScore) {
                         highScore = score;
                         localStorage.setItem('asteroids-highscore', highScore);
@@ -844,7 +1047,8 @@ function update() {
         levelTransitionTimer--;
         if (levelTransitionTimer <= 0) {
             levelTransition = false;
-            spawnAsteroids(3 + level);
+            // More asteroids per level, capped at 14 so screen doesn't become impossible
+            spawnAsteroids(Math.min(14, 3 + level));
         }
         // Still update VFX during transition
         particles.forEach(p => p.update());
@@ -880,19 +1084,12 @@ function update() {
         level++;
         levelTransition = true;
         levelTransitionTimer = 100;
+        const palette = getLevelPalette();
         levelTransitionText = `LEVEL ${level}`;
         playLevelUp();
     }
 
-    // Parallax
-    if (ship) {
-        parallax.dense.x  -= ship.velocity.x * 0.05;
-        parallax.dense.y  -= ship.velocity.y * 0.05;
-        parallax.bright.x -= ship.velocity.x * 0.15;
-        parallax.bright.y -= ship.velocity.y * 0.15;
-        parallax.nebula.x -= ship.velocity.x * 0.08;
-        parallax.nebula.y -= ship.velocity.y * 0.08;
-    }
+    // Stars are static — no update needed
 
     // Screen shake decay
     if (screenShake > 0) screenShake *= 0.85;
@@ -903,64 +1100,13 @@ function update() {
 
 // ── Draw Background ──────────────────────────────────────────
 function drawBackground() {
-    const cW = W();
-    const cH = H();
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W(), H());
 
-    // Base space
-    const baseBg = ASSETS['bg-space'];
-    if (baseBg) {
-        ctx.drawImage(baseBg, 0, 0, cW, cH);
-    } else {
-        ctx.fillStyle = '#05070c';
-        ctx.fillRect(0, 0, cW, cH);
-    }
-
-    // Dense stars (slow parallax)
-    const dense = ASSETS['bg-stars-dense'];
-    if (dense) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = 0.5;
-        const dx = ((parallax.dense.x % cW) + cW) % cW;
-        const dy = ((parallax.dense.y % cH) + cH) % cH;
-        for (let ox = -1; ox <= 1; ox++) {
-            for (let oy = -1; oy <= 1; oy++) {
-                ctx.drawImage(dense, dx + ox * cW - cW, dy + oy * cH - cH, cW, cH);
-            }
-        }
-        ctx.restore();
-    }
-
-    // Nebula (medium parallax)
-    const neb = ASSETS['bg-nebula'];
-    if (neb) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = 0.2;
-        const nx = ((parallax.nebula.x % cW) + cW) % cW;
-        const ny = ((parallax.nebula.y % cH) + cH) % cH;
-        for (let ox = -1; ox <= 1; ox++) {
-            for (let oy = -1; oy <= 1; oy++) {
-                ctx.drawImage(neb, nx + ox * cW - cW, ny + oy * cH - cH, cW, cH);
-            }
-        }
-        ctx.restore();
-    }
-
-    // Bright stars (fast parallax)
-    const bright = ASSETS['bg-stars-bright'];
-    if (bright) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = 0.7;
-        const bx = ((parallax.bright.x % cW) + cW) % cW;
-        const by = ((parallax.bright.y % cH) + cH) % cH;
-        for (let ox = -1; ox <= 1; ox++) {
-            for (let oy = -1; oy <= 1; oy++) {
-                ctx.drawImage(bright, bx + ox * cW - cW, by + oy * cH - cH, cW, cH);
-            }
-        }
-        ctx.restore();
+    const palette = getLevelPalette();
+    ctx.fillStyle = palette.starColor;
+    for (const star of STARS) {
+        ctx.fillRect(star.x, star.y, star.size, star.size);
     }
 }
 
@@ -1023,39 +1169,94 @@ function draw() {
 
     // Game over overlay
     if (gameOver) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        nameCursorBlink++;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
         ctx.fillRect(0, 0, W(), H());
-
         ctx.textAlign = 'center';
+
+        const cx = W() / 2;
+        let yOff = -S(140);
 
         // Title
         ctx.fillStyle = '#FF4444';
-        ctx.font = `bold ${S(52)}px Orbitron, monospace`;
+        ctx.font = `bold ${S(42)}px Orbitron, monospace`;
         ctx.shadowBlur = 20;
         ctx.shadowColor = '#FF4444';
-        ctx.fillText('GAME OVER', W() / 2, H() / 2 - S(50));
+        ctx.fillText('GAME OVER', cx, H() / 2 + yOff);
         ctx.shadowBlur = 0;
+        yOff += S(40);
 
-        // Score
+        // Score + Level
         ctx.fillStyle = '#FFFFFF';
-        ctx.font = `bold ${S(28)}px Orbitron, monospace`;
-        ctx.fillText(`SCORE: ${score}`, W() / 2, H() / 2 + S(5));
+        ctx.font = `bold ${S(24)}px Orbitron, monospace`;
+        ctx.fillText(`SCORE: ${score}   LEVEL: ${level}`, cx, H() / 2 + yOff);
+        yOff += S(28);
 
-        // High score
-        ctx.font = `${S(16)}px monospace`;
-        ctx.fillStyle = score >= highScore ? '#78fff5' : 'rgba(255,255,255,0.5)';
-        const hsText = score >= highScore ? 'NEW HIGH SCORE!' : `BEST: ${highScore}`;
-        ctx.fillText(hsText, W() / 2, H() / 2 + S(35));
+        // High score indicator
+        if (score >= highScore && score > 0) {
+            ctx.fillStyle = '#78fff5';
+            ctx.font = `bold ${S(14)}px monospace`;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#78fff5';
+            ctx.fillText('NEW HIGH SCORE!', cx, H() / 2 + yOff);
+            ctx.shadowBlur = 0;
+        }
+        yOff += S(30);
 
-        // Stats
-        ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.font = `${S(14)}px monospace`;
-        ctx.fillText(`REACHED LEVEL ${level}`, W() / 2, H() / 2 + S(60));
+        // Name entry
+        if (enteringName) {
+            ctx.fillStyle = 'rgba(255,255,255,0.7)';
+            ctx.font = `${S(14)}px monospace`;
+            ctx.fillText('ENTER YOUR NAME:', cx, H() / 2 + yOff);
+            yOff += S(28);
 
-        // Restart hint
-        ctx.fillStyle = 'rgba(255,255,255,0.6)';
-        ctx.font = `${S(15)}px monospace`;
-        ctx.fillText('PRESS  R  TO RESTART', W() / 2, H() / 2 + S(95));
+            // Name input box
+            const boxW = S(200);
+            const boxH = S(32);
+            ctx.strokeStyle = '#78fff5';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(cx - boxW / 2, H() / 2 + yOff - boxH + S(6), boxW, boxH);
+
+            // Name text with blinking cursor
+            const cursor = Math.floor(nameCursorBlink / 30) % 2 === 0 ? '_' : '';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = `bold ${S(20)}px Orbitron, monospace`;
+            ctx.fillText(playerName + cursor, cx, H() / 2 + yOff);
+            yOff += S(28);
+
+            ctx.fillStyle = 'rgba(255,255,255,0.4)';
+            ctx.font = `${S(12)}px monospace`;
+            ctx.fillText('TYPE NAME  ·  ENTER TO SAVE  ·  ESC TO SKIP', cx, H() / 2 + yOff);
+        } else {
+            // Show leaderboard
+            if (leaderboard.length > 0) {
+                ctx.fillStyle = '#78fff5';
+                ctx.font = `bold ${S(16)}px Orbitron, monospace`;
+                ctx.fillText('LEADERBOARD', cx, H() / 2 + yOff);
+                yOff += S(24);
+
+                ctx.font = `${S(13)}px monospace`;
+                const top = leaderboard.slice(0, 5);
+                for (let i = 0; i < top.length; i++) {
+                    const entry = top[i];
+                    const isCurrentScore = !nameSubmitted ? false :
+                        (entry.score === score && entry.name === playerName.toUpperCase());
+                    ctx.fillStyle = isCurrentScore ? '#78fff5' : 'rgba(255,255,255,0.6)';
+                    const rank = `${i + 1}.`.padEnd(3);
+                    const name = entry.name.padEnd(10);
+                    const sc = String(entry.score).padStart(6);
+                    const lv = `LV${entry.level}`;
+                    ctx.fillText(`${rank} ${name} ${sc}  ${lv}`, cx, H() / 2 + yOff);
+                    yOff += S(20);
+                }
+            }
+            yOff += S(15);
+
+            // Restart hint
+            ctx.fillStyle = 'rgba(255,255,255,0.6)';
+            ctx.font = `${S(15)}px monospace`;
+            ctx.fillText('PRESS  R  TO RESTART', cx, H() / 2 + yOff);
+        }
     }
 }
 
@@ -1074,14 +1275,63 @@ function gameLoop() {
 
 // ── Start / Restart ──────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !gameStarted && !gameOver) init();
-    if ((e.key === 'r' || e.key === 'R') && gameOver) init();
+    // Start game
+    if (e.key === 'Enter' && !gameStarted && !gameOver) { init(); return; }
+    if (e.key === ' ' && !gameStarted && !gameOver) { e.preventDefault(); init(); return; }
+
+    // Name entry mode
+    if (gameOver && enteringName) {
+        if (e.key === 'Enter' && playerName.length > 0) {
+            // Save score with name
+            saveToLeaderboard(playerName, score, level);
+            enteringName = false;
+            nameSubmitted = true;
+            return;
+        }
+        if (e.key === 'Escape') {
+            // Skip name entry
+            enteringName = false;
+            nameSubmitted = false;
+            return;
+        }
+        if (e.key === 'Backspace') {
+            playerName = playerName.slice(0, -1);
+            return;
+        }
+        // Accept alphanumeric and space, max 10 chars
+        if (playerName.length < 10 && e.key.length === 1 && /[a-zA-Z0-9 ]/.test(e.key)) {
+            playerName += e.key;
+            return;
+        }
+        return; // block all other keys during name entry
+    }
+
+    // Restart after name entry (or skip)
+    if ((e.key === 'r' || e.key === 'R') && gameOver && !enteringName) init();
+    if (e.key === ' ' && gameOver && !enteringName) { e.preventDefault(); init(); }
 });
+
+// Click/tap to start or restart (not during name entry)
+document.addEventListener('click', () => {
+    if (!gameStarted && !gameOver) init();
+    else if (gameOver && !enteringName) init();
+});
+
+// Ensure page has focus
+canvas.setAttribute('tabindex', '0');
+canvas.focus();
 
 // Load assets with progress, then start
 loadAssets((loaded, total) => {
     drawLoadingScreen(loaded, total);
 }).then(() => {
     console.log('Assets loaded:', Object.keys(ASSETS).length, '/', Object.keys(ASSET_LIST).length);
+    generateStars();
     gameLoop();
+});
+
+// Regenerate stars on resize
+window.addEventListener('resize', () => {
+    resizeCanvas();
+    generateStars();
 });
