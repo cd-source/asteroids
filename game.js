@@ -181,12 +181,18 @@ const POWERUP_WEIGHTS = {
     'multi2': 30, 'rapid': 25, 'shield': 20, 'hyperspace': 15, 'sideguns': 7, 'multi3': 3,
 };
 
-// Leaderboard
+// Supabase config
+const SUPABASE_URL = 'https://foyctuwcadmlrdsgnsrn.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZveWN0dXdjYWRtbHJkc2duc3JuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEzNzA2NzIsImV4cCI6MjA4Njk0NjY3Mn0._oTIhgNwDD8lh-6NFzTsrdUNYaFfG3YrITDVpcye-6g';
+
+// Leaderboard (local cache + remote)
 let leaderboard = JSON.parse(localStorage.getItem('asteroids-leaderboard') || '[]');
 let enteringName = false;
 let playerName = '';
 let nameSubmitted = false;
 let nameCursorBlink = 0;
+let leaderboardLoading = false;
+let leaderboardError = false;
 
 // Level transition
 let levelTransition = false;
@@ -1257,10 +1263,59 @@ function doHyperspace() {
 
 // ── Leaderboard ─────────────────────────────────────────────
 function saveToLeaderboard(name, finalScore, finalLevel) {
-    leaderboard.push({ name: name.toUpperCase(), score: finalScore, level: finalLevel, date: Date.now() });
+    const entry = { name: name.toUpperCase(), score: finalScore, level: finalLevel, date: Date.now() };
+
+    // Save locally immediately (instant feedback)
+    leaderboard.push(entry);
     leaderboard.sort((a, b) => b.score - a.score);
-    leaderboard = leaderboard.slice(0, 10); // keep top 10
+    leaderboard = leaderboard.slice(0, 10);
     localStorage.setItem('asteroids-leaderboard', JSON.stringify(leaderboard));
+
+    // Push to Supabase (fire and forget — don't block the game)
+    fetch(`${SUPABASE_URL}/rest/v1/leaderboard`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({
+            player_name: entry.name,
+            score: entry.score,
+            level: entry.level
+        })
+    }).then(() => {
+        // After saving, refresh the global leaderboard
+        fetchGlobalLeaderboard();
+    }).catch(err => {
+        console.warn('Supabase save failed (score saved locally):', err);
+    });
+}
+
+async function fetchGlobalLeaderboard() {
+    leaderboardLoading = true;
+    leaderboardError = false;
+    try {
+        const res = await fetch(
+            `${SUPABASE_URL}/rest/v1/leaderboard?select=player_name,score,level,created_at&order=score.desc&limit=10`,
+            { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        // Merge: global leaderboard replaces local
+        leaderboard = data.map(row => ({
+            name: row.player_name,
+            score: row.score,
+            level: row.level,
+            date: new Date(row.created_at).getTime()
+        }));
+        localStorage.setItem('asteroids-leaderboard', JSON.stringify(leaderboard));
+    } catch (err) {
+        console.warn('Supabase fetch failed (using local cache):', err);
+        leaderboardError = true;
+    }
+    leaderboardLoading = false;
 }
 
 function getLeaderboardRank(finalScore) {
@@ -1429,6 +1484,7 @@ function checkCollisions() {
                     enteringName = true;
                     nameSubmitted = false;
                     playerName = '';
+                    fetchGlobalLeaderboard(); // Refresh before showing
                     if (score > highScore) {
                         highScore = score;
                         localStorage.setItem('asteroids-highscore', highScore);
@@ -1715,28 +1771,42 @@ function draw() {
             ctx.fillText('TYPE NAME  ·  ENTER TO SAVE  ·  ESC TO SKIP', cx, H() / 2 + yOff);
         } else {
             // Show leaderboard
-            if (leaderboard.length > 0) {
-                ctx.fillStyle = '#78fff5';
-                ctx.font = `bold ${S(16)}px Orbitron, monospace`;
-                ctx.fillText('LEADERBOARD', cx, H() / 2 + yOff);
-                yOff += S(24);
+            ctx.fillStyle = '#78fff5';
+            ctx.font = `bold ${S(16)}px Orbitron, monospace`;
+            const lbTitle = leaderboardError ? 'LEADERBOARD (LOCAL)' : 'GLOBAL LEADERBOARD';
+            ctx.fillText(lbTitle, cx, H() / 2 + yOff);
+            yOff += S(6);
 
+            // Subtle indicator
+            if (leaderboardLoading) {
+                ctx.fillStyle = 'rgba(120,255,245,0.4)';
+                ctx.font = `${S(10)}px monospace`;
+                ctx.fillText('updating...', cx, H() / 2 + yOff);
+            }
+            yOff += S(18);
+
+            if (leaderboard.length > 0) {
                 ctx.font = `${S(13)}px monospace`;
-                const top = leaderboard.slice(0, 5);
+                const top = leaderboard.slice(0, 10);
                 for (let i = 0; i < top.length; i++) {
                     const entry = top[i];
-                    const isCurrentScore = !nameSubmitted ? false :
-                        (entry.score === score && entry.name === playerName.toUpperCase());
+                    const isCurrentScore = nameSubmitted &&
+                        entry.score === score && entry.name === playerName.toUpperCase();
                     ctx.fillStyle = isCurrentScore ? '#78fff5' : 'rgba(255,255,255,0.6)';
                     const rank = `${i + 1}.`.padEnd(3);
                     const name = entry.name.padEnd(10);
                     const sc = String(entry.score).padStart(6);
                     const lv = `LV${entry.level}`;
                     ctx.fillText(`${rank} ${name} ${sc}  ${lv}`, cx, H() / 2 + yOff);
-                    yOff += S(20);
+                    yOff += S(18);
                 }
+            } else {
+                ctx.fillStyle = 'rgba(255,255,255,0.4)';
+                ctx.font = `${S(13)}px monospace`;
+                ctx.fillText('NO SCORES YET — BE THE FIRST!', cx, H() / 2 + yOff);
+                yOff += S(20);
             }
-            yOff += S(15);
+            yOff += S(12);
 
             // Restart hint
             ctx.fillStyle = 'rgba(255,255,255,0.6)';
@@ -1820,6 +1890,7 @@ loadAssets((loaded, total) => {
 }).then(() => {
     console.log('Assets loaded:', Object.keys(ASSETS).length, '/', Object.keys(ASSET_LIST).length);
     generateStars();
+    fetchGlobalLeaderboard(); // Load global scores on startup
     gameLoop();
 });
 
