@@ -1316,6 +1316,21 @@ async function fetchGlobalLeaderboard() {
         leaderboardError = true;
     }
     leaderboardLoading = false;
+    updateStartScreenLeaderboard();
+}
+
+function updateStartScreenLeaderboard() {
+    const container = document.getElementById('startLeaderboard');
+    const table = document.getElementById('startLeaderboardTable');
+    if (!container || !table) return;
+    if (leaderboard.length === 0) { container.style.display = 'none'; return; }
+    container.style.display = 'block';
+    const top5 = leaderboard.slice(0, 5);
+    table.innerHTML = top5.map((e, i) => {
+        const rank = i + 1;
+        const color = rank === 1 ? '#78fff5' : 'rgba(255,255,255,0.6)';
+        return `<tr style="color:${color}"><td style="padding:2px 8px;text-align:right">${rank}.</td><td style="padding:2px 8px">${e.name}</td><td style="padding:2px 8px;text-align:right">${e.score.toLocaleString()}</td><td style="padding:2px 8px;color:rgba(255,255,255,0.35)">LV${e.level}</td></tr>`;
+    }).join('');
 }
 
 function getLeaderboardRank(finalScore) {
