@@ -175,6 +175,13 @@ const UFO_SPAWN_MIN = 900;   // ~15 seconds minimum between spawns
 const UFO_SPAWN_MAX = 1500;  // ~25 seconds max
 const UFO_MAX_ACTIVE = 1;    // only 1 on screen at a time
 
+// Boss
+let boss = null;
+let bossActive = false;
+
+// Extra lives
+let nextExtraLife = 10000; // first extra life at 10,000 points
+
 const POWERUP_TYPES = {
     'multi2':    { label: '2x GUN',     color: '#FF8800', duration: 600,  permanent: false, icon: '⟐' },
     'multi3':    { label: '3x GUN',     color: '#FF4400', duration: 450,  permanent: false, icon: '⟐' },
@@ -553,6 +560,95 @@ function playUfoExplosion() {
     ring.stop(t + 0.3);
 }
 
+function playExtraLife() {
+    if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
+    const notes = [523, 659, 784, 1047, 1319];
+    notes.forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.connect(g);
+        g.connect(audioCtx.destination);
+        osc.frequency.setValueAtTime(freq, t + i * 0.08);
+        g.gain.setValueAtTime(0.15, t + i * 0.08);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.3);
+        osc.start(t + i * 0.08);
+        osc.stop(t + i * 0.08 + 0.3);
+    });
+}
+
+function playBossWarning() {
+    if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
+    for (let i = 0; i < 3; i++) {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.connect(g);
+        g.connect(audioCtx.destination);
+        osc.frequency.setValueAtTime(65, t + i * 0.4);
+        osc.frequency.linearRampToValueAtTime(55, t + i * 0.4 + 0.35);
+        g.gain.setValueAtTime(0.2, t + i * 0.4);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.4 + 0.35);
+        osc.start(t + i * 0.4);
+        osc.stop(t + i * 0.4 + 0.35);
+    }
+}
+
+function playBossHit() {
+    if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'square';
+    osc.connect(g);
+    g.connect(audioCtx.destination);
+    osc.frequency.setValueAtTime(200, t);
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.1);
+    g.gain.setValueAtTime(0.15, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    osc.start(t);
+    osc.stop(t + 0.1);
+}
+
+function playBossDefeat() {
+    if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
+    const dur = 1.0;
+    const bufSz = audioCtx.sampleRate * dur;
+    const buf = audioCtx.createBuffer(1, bufSz, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSz; i++) data[i] = Math.random() * 2 - 1;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const flt = audioCtx.createBiquadFilter();
+    flt.type = 'lowpass';
+    flt.frequency.setValueAtTime(600, t);
+    flt.frequency.exponentialRampToValueAtTime(30, t + dur);
+    const g1 = audioCtx.createGain();
+    g1.gain.setValueAtTime(0.35, t);
+    g1.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(flt);
+    flt.connect(g1);
+    g1.connect(audioCtx.destination);
+    src.start(t);
+    src.stop(t + dur);
+    const notes = [523, 659, 784, 1047];
+    notes.forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.connect(g);
+        g.connect(audioCtx.destination);
+        osc.frequency.setValueAtTime(freq, t + 0.5 + i * 0.12);
+        g.gain.setValueAtTime(0.12, t + 0.5 + i * 0.12);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.5 + i * 0.12 + 0.4);
+        osc.start(t + 0.5 + i * 0.12);
+        osc.stop(t + 0.5 + i * 0.12 + 0.4);
+    });
+}
+
 function startThrust() {
     if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx || thrustOscillator) return;
     const t = audioCtx.currentTime;
@@ -641,11 +737,12 @@ class ScorePopup {
         const t = this.life / this.maxLife;
         ctx.save();
         ctx.globalAlpha = t;
-        ctx.fillStyle = '#78fff5';
-        ctx.font = `bold ${S(16)}px Orbitron, monospace`;
+        const isExtraLife = this.pts === '1-UP';
+        ctx.fillStyle = isExtraLife ? '#44FF88' : '#78fff5';
+        ctx.font = `bold ${S(isExtraLife ? 20 : 16)}px Orbitron, monospace`;
         ctx.textAlign = 'center';
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = '#00d4ff';
+        ctx.shadowBlur = isExtraLife ? 14 : 8;
+        ctx.shadowColor = isExtraLife ? '#44FF88' : '#00d4ff';
         const label = typeof this.pts === 'string' ? this.pts : `+${this.pts}`;
         ctx.fillText(label, this.x, this.y);
         ctx.shadowBlur = 0;
@@ -1414,6 +1511,337 @@ class UFOBullet {
     }
 }
 
+// ── Boss (Mothership) ───────────────────────────────────────
+class Boss {
+    constructor(bossNumber) {
+        this.bossNumber = bossNumber;
+        this.x = W() / 2;
+        this.y = -S(100);
+        this.targetY = H() * 0.22;
+        this.entering = true;
+
+        this.maxHp = 15 + bossNumber * 5;
+        this.hp = this.maxHp;
+        this.radius = S(50);
+        this.points = 5000 * bossNumber;
+
+        this.direction = 1;
+        this.speed = S(0.8 + bossNumber * 0.15);
+        this.sinePhase = 0;
+
+        this.attackTimer = 150;
+        this.attackPattern = 0;
+        this.burstQueue = [];
+
+        this.pulsePhase = 0;
+        this.hitFlash = 0;
+        this.bodyColor = bossNumber <= 1 ? '#FF2244' : bossNumber <= 2 ? '#AA22FF' : '#FFAA00';
+        this.glowColor = bossNumber <= 1 ? '#FF0022' : bossNumber <= 2 ? '#8800FF' : '#FF8800';
+    }
+
+    draw() {
+        const sz = S(110);
+        const pulse = 1 + Math.sin(this.pulsePhase) * 0.03;
+
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        if (this.hitFlash > 0) {
+            ctx.globalAlpha = 0.3;
+            ctx.fillStyle = '#FFFFFF';
+            ctx.beginPath();
+            ctx.ellipse(0, 0, sz * 0.6, sz * 0.3, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Large glow
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = this.glowColor;
+        ctx.beginPath();
+        ctx.ellipse(0, S(5), sz * 0.7 * pulse, sz * 0.35 * pulse, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main saucer body
+        ctx.globalAlpha = 0.95;
+        ctx.fillStyle = '#0a0a1e';
+        ctx.strokeStyle = this.bodyColor;
+        ctx.lineWidth = S(2.5);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, sz * 0.5 * pulse, sz * 0.18 * pulse, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Inner ring
+        ctx.strokeStyle = this.bodyColor;
+        ctx.lineWidth = S(1);
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, sz * 0.35 * pulse, sz * 0.12 * pulse, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Large dome
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = '#151530';
+        ctx.strokeStyle = this.bodyColor;
+        ctx.lineWidth = S(2);
+        ctx.beginPath();
+        ctx.ellipse(0, -sz * 0.06 * pulse, sz * 0.25 * pulse, sz * 0.18 * pulse, 0, Math.PI, 0);
+        ctx.fill();
+        ctx.stroke();
+
+        // Rotating window lights
+        ctx.globalAlpha = 0.7 + Math.sin(this.pulsePhase * 3) * 0.3;
+        ctx.fillStyle = this.bodyColor;
+        for (let i = 0; i < 10; i++) {
+            const a = (i / 10) * Math.PI * 2 + this.pulsePhase * 0.5;
+            const lx = Math.cos(a) * sz * 0.42 * pulse;
+            const ly = Math.sin(a) * sz * 0.1 * pulse;
+            ctx.beginPath();
+            ctx.arc(lx, ly, S(2.5), 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Engine glow
+        ctx.globalAlpha = 0.5 + Math.sin(this.pulsePhase * 2) * 0.2;
+        ctx.fillStyle = this.glowColor;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = this.glowColor;
+        ctx.beginPath();
+        ctx.ellipse(0, sz * 0.12 * pulse, sz * 0.2, S(5), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Weapon ports
+        ctx.globalAlpha = 0.6 + Math.sin(this.pulsePhase * 4) * 0.3;
+        ctx.fillStyle = '#FF4444';
+        ctx.beginPath();
+        ctx.arc(-sz * 0.35, sz * 0.05, S(3), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sz * 0.35, sz * 0.05, S(3), 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+        this.drawHealthBar();
+    }
+
+    drawHealthBar() {
+        const barW = S(120);
+        const barH = S(8);
+        const barX = this.x - barW / 2;
+        const barY = this.y - S(55);
+        const hpRatio = this.hp / this.maxHp;
+
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = '#111';
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW, barH, barH / 2);
+        ctx.fill();
+
+        ctx.globalAlpha = 0.9;
+        const barColor = hpRatio > 0.5 ? '#44FF44' : hpRatio > 0.25 ? '#FFAA00' : '#FF3333';
+        ctx.fillStyle = barColor;
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW * hpRatio, barH, barH / 2);
+        ctx.fill();
+
+        ctx.shadowBlur = 6;
+        ctx.shadowColor = barColor;
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW * hpRatio, barH, barH / 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.globalAlpha = 0.6;
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW, barH, barH / 2);
+        ctx.stroke();
+
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `bold ${S(9)}px Orbitron, monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillText(`BOSS ${this.bossNumber}`, this.x, barY - S(5));
+        ctx.restore();
+    }
+
+    update() {
+        this.pulsePhase += 0.05;
+        if (this.hitFlash > 0) this.hitFlash--;
+
+        // Process burst queue
+        if (this.burstQueue.length > 0) {
+            this.burstQueue[0].delay--;
+            if (this.burstQueue[0].delay <= 0) {
+                const shot = this.burstQueue.shift();
+                ufoBullets.push(new UFOBullet(
+                    this.x + Math.cos(shot.angle) * this.radius,
+                    this.y + Math.sin(shot.angle) * this.radius,
+                    Math.cos(shot.angle) * shot.speed,
+                    Math.sin(shot.angle) * shot.speed
+                ));
+                playUfoShot();
+            }
+        }
+
+        if (this.entering) {
+            this.y += S(1.5);
+            if (this.y >= this.targetY) {
+                this.y = this.targetY;
+                this.entering = false;
+            }
+            return;
+        }
+
+        this.x += this.speed * this.direction;
+        this.sinePhase += 0.018;
+        this.y = this.targetY + Math.sin(this.sinePhase) * S(35);
+
+        if (this.x < S(100)) { this.x = S(100); this.direction = 1; }
+        if (this.x > W() - S(100)) { this.x = W() - S(100); this.direction = -1; }
+
+        this.attackTimer--;
+        if (this.attackTimer <= 0 && this.burstQueue.length === 0) {
+            this.doAttack();
+            this.attackTimer = Math.max(40, 100 - this.bossNumber * 8);
+        }
+    }
+
+    doAttack() {
+        this.attackPattern = (this.attackPattern + 1) % 3;
+        switch (this.attackPattern) {
+            case 0: this.spreadShot(); break;
+            case 1: this.aimedBurst(); break;
+            case 2: this.spawnMinions(); break;
+        }
+    }
+
+    spreadShot() {
+        const count = 5 + Math.min(4, this.bossNumber);
+        const spreadAngle = Math.PI * 0.6;
+        const baseAngle = Math.PI / 2;
+        for (let i = 0; i < count; i++) {
+            const angle = baseAngle - spreadAngle / 2 + (i / (count - 1)) * spreadAngle;
+            const speed = S(4);
+            ufoBullets.push(new UFOBullet(
+                this.x + Math.cos(angle) * this.radius,
+                this.y + Math.sin(angle) * this.radius,
+                Math.cos(angle) * speed,
+                Math.sin(angle) * speed
+            ));
+        }
+        playUfoShot();
+    }
+
+    aimedBurst() {
+        if (!ship) return;
+        const baseAngle = Math.atan2(ship.y - this.y, ship.x - this.x);
+        for (let i = 0; i < 3; i++) {
+            this.burstQueue.push({
+                angle: baseAngle + (Math.random() - 0.5) * 0.3,
+                speed: S(5),
+                delay: i * 8
+            });
+        }
+    }
+
+    spawnMinions() {
+        const count = 2 + (this.bossNumber > 2 ? 1 : 0);
+        for (let i = 0; i < count; i++) {
+            const angle = Math.PI / 2 + (Math.random() - 0.5) * 1.5;
+            const dist = this.radius + S(20);
+            asteroids.push(new Asteroid(
+                this.x + Math.cos(angle) * dist,
+                this.y + Math.sin(angle) * dist,
+                1
+            ));
+        }
+        for (let k = 0; k < 5; k++) {
+            const a = Math.random() * Math.PI * 2;
+            const s = S(2 + Math.random() * 3);
+            particles.push(new Particle(this.x, this.y,
+                Math.cos(a) * s, Math.sin(a) * s, 'spark', 15));
+        }
+    }
+
+    takeDamage() {
+        this.hp--;
+        this.hitFlash = 6;
+        screenShake = S(2);
+        playBossHit();
+        for (let k = 0; k < 3; k++) {
+            const a = Math.random() * Math.PI * 2;
+            const s = S(2 + Math.random() * 3);
+            particles.push(new Particle(this.x, this.y,
+                Math.cos(a) * s, Math.sin(a) * s, 'spark', 12));
+        }
+    }
+}
+
+// ── Extra Life Check ────────────────────────────────────────
+function checkExtraLife() {
+    while (score >= nextExtraLife) {
+        lives++;
+        playExtraLife();
+        scorePopups.push(new ScorePopup(
+            ship ? ship.x : W() / 2,
+            ship ? ship.y - S(30) : H() / 2,
+            '1-UP'
+        ));
+        updateUI();
+        nextExtraLife += 10000;
+    }
+}
+
+// ── Boss Defeat ─────────────────────────────────────────────
+function defeatBoss() {
+    if (!boss) return;
+
+    // Massive explosion
+    explosions.push(new Explosion(boss.x, boss.y, S(200)));
+    shockwaves.push(new Shockwave(boss.x, boss.y));
+    for (let k = 0; k < 20; k++) {
+        const a = Math.random() * Math.PI * 2;
+        const s = S(3 + Math.random() * 6);
+        particles.push(new Particle(boss.x, boss.y,
+            Math.cos(a) * s, Math.sin(a) * s, 'spark', 30));
+    }
+    for (let i = 0; i < 5; i++) {
+        const ox = (Math.random() - 0.5) * S(80);
+        const oy = (Math.random() - 0.5) * S(40);
+        explosions.push(new Explosion(boss.x + ox, boss.y + oy, S(80)));
+    }
+
+    screenShake = S(20);
+    playBossDefeat();
+
+    score += boss.points;
+    scorePopups.push(new ScorePopup(boss.x, boss.y - S(30), boss.points));
+    checkExtraLife();
+
+    // Drop 2 guaranteed power-ups
+    for (let i = 0; i < 2; i++) {
+        const ox = (Math.random() - 0.5) * S(60);
+        spawnPowerUp(boss.x + ox, boss.y);
+    }
+
+    bossActive = false;
+    boss = null;
+    ufoBullets = [];
+
+    // Advance to next level
+    level++;
+    levelTransition = true;
+    levelTransitionTimer = 120;
+    levelTransitionText = `LEVEL ${level}`;
+    playLevelUp();
+    resetUfoSpawnTimer();
+    updateUI();
+}
+
 // ── UFO Spawning ────────────────────────────────────────────
 function resetUfoSpawnTimer() {
     // Faster spawns at higher levels
@@ -1437,7 +1865,7 @@ function spawnUfo() {
 
 function updateUfos() {
     // Spawn timer — only from level 2+
-    if (level >= 2 && ufos.length < UFO_MAX_ACTIVE) {
+    if (level >= 2 && ufos.length < UFO_MAX_ACTIVE && !bossActive) {
         ufoSpawnTimer--;
         if (ufoSpawnTimer <= 0) {
             spawnUfo();
@@ -1715,6 +2143,9 @@ function init() {
     ufoBullets = [];
     stopUfoHum();
     resetUfoSpawnTimer();
+    boss = null;
+    bossActive = false;
+    nextExtraLife = 10000;
     enteringName = false;
     playerName = '';
     nameSubmitted = false;
@@ -1764,6 +2195,7 @@ function checkCollisions() {
                 const pts = (4 - aSize) * 25;
                 score += pts;
                 scorePopups.push(new ScorePopup(ax, ay - S(15), pts));
+                checkExtraLife();
 
                 // Track consecutive hits for power-up drops
                 consecutiveHits++;
@@ -1811,6 +2243,7 @@ function checkCollisions() {
                 screenShake = S(8);
                 score += pts;
                 scorePopups.push(new ScorePopup(ux, uy - S(15), pts));
+                checkExtraLife();
                 consecutiveHits++;
 
                 // UFOs have a high power-up drop chance (40%)
@@ -1821,6 +2254,21 @@ function checkCollisions() {
                 ufos.splice(j, 1);
                 bullets.splice(i, 1);
                 break;
+            }
+        }
+    }
+
+    // Player Bullets vs Boss
+    if (bossActive && boss) {
+        for (let i = bullets.length - 1; i >= 0; i--) {
+            const dist = Math.hypot(bullets[i].x - boss.x, bullets[i].y - boss.y);
+            if (dist < boss.radius + S(4)) {
+                bullets.splice(i, 1);
+                boss.takeDamage();
+                if (boss.hp <= 0) {
+                    defeatBoss();
+                    break;
+                }
             }
         }
     }
@@ -2006,8 +2454,13 @@ function update() {
         levelTransitionTimer--;
         if (levelTransitionTimer <= 0) {
             levelTransition = false;
-            // More asteroids per level, capped at 14 so screen doesn't become impossible
-            spawnAsteroids(Math.min(14, 3 + level));
+            if (level % 5 === 0) {
+                boss = new Boss(Math.floor(level / 5));
+                bossActive = true;
+                startUfoHum();
+            } else {
+                spawnAsteroids(Math.min(14, 3 + level));
+            }
         }
         // Still update VFX during transition
         particles.forEach(p => p.update());
@@ -2026,6 +2479,7 @@ function update() {
     scorePopups.forEach(p => p.update());
     updatePowerUps();
     updateUfos();
+    if (bossActive && boss) boss.update();
 
     bullets = bullets.filter(b => b.life > 0);
     particles = particles.filter(p => p.life > 0);
@@ -2041,14 +2495,19 @@ function update() {
     }
 
     // Level complete
-    if (asteroids.length === 0 && !levelTransition) {
+    if (asteroids.length === 0 && !levelTransition && !bossActive) {
         level++;
         levelTransition = true;
-        levelTransitionTimer = 100;
-        const palette = getLevelPalette();
-        levelTransitionText = `LEVEL ${level}`;
-        playLevelUp();
-        // Clear UFOs between levels — fresh spawn timer for next level
+        if (level % 5 === 0) {
+            levelTransitionTimer = 150;
+            levelTransitionText = 'WARNING';
+            playBossWarning();
+        } else {
+            levelTransitionTimer = 100;
+            levelTransitionText = `LEVEL ${level}`;
+            playLevelUp();
+        }
+        // Clear UFOs between levels
         ufos = [];
         ufoBullets = [];
         stopUfoHum();
@@ -2156,6 +2615,7 @@ function draw() {
     asteroids.forEach(a => a.draw());
     ufos.forEach(u => u.draw());
     ufoBullets.forEach(b => b.draw());
+    if (bossActive && boss) boss.draw();
     powerups.forEach(p => p.draw());
     bullets.forEach(b => b.draw());
     if (gameStarted && !gameOver && ship) ship.draw();
@@ -2185,19 +2645,20 @@ function draw() {
         const fadeOut = Math.min(1, t * 3);
         const alpha = Math.min(fadeIn, fadeOut);
 
+        const isBossLevel = level % 5 === 0 && levelTransitionText === 'WARNING';
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = '#78fff5';
-        ctx.font = `bold ${S(48)}px Orbitron, monospace`;
+        ctx.fillStyle = isBossLevel ? '#FF4444' : '#78fff5';
+        ctx.font = `bold ${S(isBossLevel ? 52 : 48)}px Orbitron, monospace`;
         ctx.textAlign = 'center';
         ctx.shadowBlur = 25;
-        ctx.shadowColor = '#00d4ff';
+        ctx.shadowColor = isBossLevel ? '#FF0000' : '#00d4ff';
         ctx.fillText(levelTransitionText, W() / 2, H() / 2);
 
         ctx.font = `${S(16)}px monospace`;
-        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillStyle = isBossLevel ? 'rgba(255,100,100,0.7)' : 'rgba(255,255,255,0.6)';
         ctx.shadowBlur = 0;
-        ctx.fillText('GET READY', W() / 2, H() / 2 + S(35));
+        ctx.fillText(isBossLevel ? 'BOSS INCOMING' : 'GET READY', W() / 2, H() / 2 + S(35));
         ctx.restore();
     }
 
@@ -2391,3 +2852,53 @@ window.addEventListener('resize', () => {
     resizeCanvas();
     generateStars();
 });
+
+// ── Mobile Touch Controls ───────────────────────────────────
+(function() {
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const touchControls = document.getElementById('touchControls');
+    if (!isTouchDevice || !touchControls) return;
+
+    touchControls.style.display = 'block';
+
+    const mappings = {
+        'touchLeft': 'ArrowLeft',
+        'touchRight': 'ArrowRight',
+        'touchThrust': 'ArrowUp',
+        'touchFire': ' ',
+        'touchHyper': 'Tab'
+    };
+
+    for (const [id, key] of Object.entries(mappings)) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+
+        el.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            keys[key] = true;
+            el.classList.add('active');
+            // Start game on touch if not started
+            if (!gameStarted && !gameOver) { initAudio(); init(); }
+            else if (gameOver && !enteringName) init();
+            // Hyperspace
+            if (key === 'Tab' && gameStarted && !gameOver) doHyperspace();
+        }, { passive: false });
+
+        el.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            keys[key] = false;
+            el.classList.remove('active');
+        }, { passive: false });
+
+        el.addEventListener('touchcancel', () => {
+            keys[key] = false;
+            el.classList.remove('active');
+        });
+    }
+
+    // Also allow tapping the canvas to start
+    canvas.addEventListener('touchstart', (e) => {
+        if (!gameStarted && !gameOver) { e.preventDefault(); initAudio(); init(); }
+        else if (gameOver && !enteringName) { e.preventDefault(); init(); }
+    }, { passive: false });
+})();
