@@ -93,51 +93,102 @@ function loadAssets(onProgress) {
 }
 
 // ── Loading Screen ───────────────────────────────────────────
-function drawLoadingScreen(loaded, total) {
+let loadingStars = [];
+let loadingAngle = 0;
+let loadingLoaded = 0;
+let loadingTotal = 1;
+
+function drawLoadingScreen() {
     const W = canvas.width;
     const H = canvas.height;
-    ctx.fillStyle = '#05070c';
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W, H);
 
-    const progress = loaded / total;
-    const barW = Math.min(320, W * 0.5);
-    const barH = 6;
-    const barX = (W - barW) / 2;
-    const barY = H / 2 + 30;
+    // Animated star field
+    if (loadingStars.length === 0) {
+        for (let i = 0; i < 80; i++) {
+            loadingStars.push({
+                x: Math.random() * W,
+                y: Math.random() * H,
+                size: Math.random() < 0.8 ? 1 : 2,
+                twinkle: Math.random() * Math.PI * 2
+            });
+        }
+    }
+    for (const star of loadingStars) {
+        star.twinkle += 0.02;
+        ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.sin(star.twinkle) * 0.25})`;
+        ctx.fillRect(star.x, star.y, star.size, star.size);
+    }
 
-    // Title
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = `bold ${Math.round(W * 0.04)}px Orbitron, monospace`;
+    const progress = loadingTotal > 0 ? loadingLoaded / loadingTotal : 0;
+    const cx = W / 2;
+    const cy = H / 2;
+
+    // Rotating ship silhouette
+    loadingAngle += 0.012;
+    ctx.save();
+    ctx.translate(cx, cy - H * 0.08);
+    ctx.rotate(loadingAngle);
+    const ss = Math.min(W, H) * 0.05;
+    ctx.fillStyle = 'rgba(120, 255, 245, 0.12)';
+    ctx.strokeStyle = 'rgba(120, 255, 245, 0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ss, 0);
+    ctx.lineTo(-ss * 0.75, -ss * 0.6);
+    ctx.lineTo(-ss * 0.5, 0);
+    ctx.lineTo(-ss * 0.75, ss * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Title with glow
+    ctx.save();
+    ctx.fillStyle = '#78fff5';
+    ctx.font = `bold ${Math.round(W * 0.05)}px Orbitron, monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText('ASTEROIDS', W / 2, H / 2 - 20);
+    ctx.shadowBlur = 30;
+    ctx.shadowColor = '#00d4ff';
+    ctx.fillText('ASTEROIDS', cx, cy + H * 0.02);
+    ctx.shadowBlur = 0;
+    ctx.restore();
 
-    // Subtitle
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    // Loading percentage
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
     ctx.font = `${Math.round(W * 0.014)}px monospace`;
-    ctx.fillText(`Loading assets  ${loaded}/${total}`, W / 2, H / 2 + 12);
+    ctx.textAlign = 'center';
+    ctx.fillText(`LOADING ${Math.round(progress * 100)}%`, cx, cy + H * 0.07);
 
-    // Progress bar track
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    // Progress bar
+    const barW = Math.min(280, W * 0.35);
+    const barH = 3;
+    const barX = cx - barW / 2;
+    const barY = cy + H * 0.10;
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
     ctx.beginPath();
     ctx.roundRect(barX, barY, barW, barH, barH / 2);
     ctx.fill();
 
-    // Progress bar fill
-    const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-    grad.addColorStop(0, '#00d4ff');
-    grad.addColorStop(1, '#78fff5');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.roundRect(barX, barY, barW * progress, barH, barH / 2);
-    ctx.fill();
+    if (progress > 0) {
+        const grad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+        grad.addColorStop(0, '#00d4ff');
+        grad.addColorStop(1, '#78fff5');
+        ctx.fillStyle = grad;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#00d4ff';
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW * progress, barH, barH / 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
 
-    // Glow
-    ctx.shadowBlur = 15;
-    ctx.shadowColor = '#00d4ff';
-    ctx.beginPath();
-    ctx.roundRect(barX, barY, barW * progress, barH, barH / 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    // Credits
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.font = `${Math.round(W * 0.011)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('AN EDENIC LABS GAME', cx, H - H * 0.06);
 }
 
 // ── Game State ───────────────────────────────────────────────
@@ -167,6 +218,16 @@ let lastPowerUpTime = 0; // frameCount when last power-up was spawned
 let hyperspaceCharges = 0;
 let hasShield = false;
 
+// Ship skins
+let currentSkin = 'classic';
+let unlockedSkins = new Set(['classic']);
+let skinAsteroidKills = 0;
+let skinUfoKills = 0;
+let skinBossKills = 0;
+let skinShotsFired = 0;
+let skinShotsHit = 0;
+let shipTrail = [];
+
 // UFOs
 let ufos = [];
 let ufoBullets = [];
@@ -194,6 +255,16 @@ const POWERUP_TYPES = {
 // Drop weights by power-up type (higher = more common)
 const POWERUP_WEIGHTS = {
     'multi2': 30, 'rapid': 25, 'shield': 20, 'hyperspace': 15, 'sideguns': 7, 'multi3': 3,
+};
+
+// Ship skins — earned through gameplay milestones (per-run, no persistence)
+const SHIP_SKINS = {
+    'classic':  { label: 'CLASSIC',  tier: 0, color: '#4A9EFF', glow: '#2E7FD9' },
+    'dart':     { label: 'DART',     tier: 1, color: '#00FFCC', glow: '#00AA88' },
+    'viper':    { label: 'VIPER',    tier: 2, color: '#FF6600', glow: '#CC4400' },
+    'phoenix':  { label: 'PHOENIX',  tier: 3, color: '#FFAA00', glow: '#FF6600' },
+    'phantom':  { label: 'PHANTOM',  tier: 4, color: '#BB77FF', glow: '#7733CC' },
+    'heavy':    { label: 'HEAVY',    tier: 5, color: '#88CC44', glow: '#557722' },
 };
 
 // Supabase config
@@ -649,6 +720,121 @@ function playBossDefeat() {
     });
 }
 
+function playSkinUnlock() {
+    if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx) return;
+    const t = audioCtx.currentTime;
+    // Triumphant fanfare — ascending with shimmer
+    const notes = [440, 554, 659, 880];
+    notes.forEach((freq, i) => {
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.connect(g);
+        g.connect(audioCtx.destination);
+        osc.frequency.setValueAtTime(freq, t + i * 0.1);
+        g.gain.setValueAtTime(0.15, t + i * 0.1);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.4);
+        osc.start(t + i * 0.1);
+        osc.stop(t + i * 0.1 + 0.4);
+        // High shimmer
+        const osc2 = audioCtx.createOscillator();
+        const g2 = audioCtx.createGain();
+        osc2.type = 'sine';
+        osc2.connect(g2);
+        g2.connect(audioCtx.destination);
+        osc2.frequency.setValueAtTime(freq * 2, t + i * 0.1);
+        g2.gain.setValueAtTime(0.06, t + i * 0.1);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + i * 0.1 + 0.3);
+        osc2.start(t + i * 0.1);
+        osc2.stop(t + i * 0.1 + 0.3);
+    });
+}
+
+function isSkinUnlocked(name) {
+    switch (name) {
+        case 'classic': return true;
+        case 'dart': return skinAsteroidKills >= 30;
+        case 'viper': return skinUfoKills >= 5;
+        case 'phoenix': return skinBossKills >= 1;
+        case 'phantom': return skinShotsFired >= 50 && (skinShotsHit / skinShotsFired) >= 0.7;
+        case 'heavy': return level >= 10;
+        default: return false;
+    }
+}
+
+function checkSkinUpgrade() {
+    let highestTier = 0;
+    let highestSkin = 'classic';
+
+    for (const [name, skin] of Object.entries(SHIP_SKINS)) {
+        if (name === 'classic') continue;
+        if (isSkinUnlocked(name)) {
+            if (!unlockedSkins.has(name)) {
+                unlockedSkins.add(name);
+                // Show popup for newly unlocked skin
+                if (ship) {
+                    scorePopups.push(new ScorePopup(ship.x, ship.y - S(40), `NEW SHIP: ${skin.label}`));
+                    playSkinUnlock();
+                }
+            }
+            if (skin.tier > highestTier) {
+                highestTier = skin.tier;
+                highestSkin = name;
+            }
+        }
+    }
+
+    if (highestSkin !== currentSkin) {
+        currentSkin = highestSkin;
+        invincible = true;
+        invincibleTimer = Math.max(invincibleTimer, 20);
+    }
+}
+
+function drawMiniShip(x, y, skinName, size) {
+    const skin = SHIP_SKINS[skinName] || SHIP_SKINS['classic'];
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = skin.color;
+    ctx.shadowBlur = 3;
+    ctx.shadowColor = skin.glow;
+    const s = size;
+    ctx.beginPath();
+    if (skinName === 'dart') {
+        ctx.moveTo(s * 1.3, 0);
+        ctx.lineTo(-s * 0.6, -s * 0.35);
+        ctx.lineTo(-s * 0.3, 0);
+        ctx.lineTo(-s * 0.6, s * 0.35);
+    } else if (skinName === 'viper') {
+        ctx.moveTo(s, -s * 0.3);
+        ctx.lineTo(-s * 0.6, -s * 0.6);
+        ctx.lineTo(-s * 0.3, 0);
+        ctx.lineTo(-s * 0.6, s * 0.6);
+        ctx.lineTo(s, s * 0.3);
+        ctx.lineTo(s * 0.6, 0);
+    } else if (skinName === 'phoenix') {
+        ctx.moveTo(s, 0);
+        ctx.lineTo(-s * 0.8, -s * 0.8);
+        ctx.lineTo(-s * 0.5, 0);
+        ctx.lineTo(-s * 0.8, s * 0.8);
+    } else if (skinName === 'heavy') {
+        ctx.moveTo(s * 0.7, 0);
+        ctx.lineTo(-s * 0.6, -s * 0.65);
+        ctx.lineTo(-s * 0.7, 0);
+        ctx.lineTo(-s * 0.6, s * 0.65);
+    } else {
+        // classic / phantom
+        ctx.moveTo(s, 0);
+        ctx.lineTo(-s * 0.6, -s * 0.5);
+        ctx.lineTo(-s * 0.3, 0);
+        ctx.lineTo(-s * 0.6, s * 0.5);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
 function startThrust() {
     if (!window.__ASTEROIDS_SOUND_ON__ || !audioCtx || thrustOscillator) return;
     const t = audioCtx.currentTime;
@@ -738,11 +924,12 @@ class ScorePopup {
         ctx.save();
         ctx.globalAlpha = t;
         const isExtraLife = this.pts === '1-UP';
-        ctx.fillStyle = isExtraLife ? '#44FF88' : '#78fff5';
-        ctx.font = `bold ${S(isExtraLife ? 20 : 16)}px Orbitron, monospace`;
+        const isSkinUnlockMsg = typeof this.pts === 'string' && this.pts.startsWith('NEW SHIP');
+        ctx.fillStyle = isSkinUnlockMsg ? '#FFAA00' : isExtraLife ? '#44FF88' : '#78fff5';
+        ctx.font = `bold ${S(isSkinUnlockMsg ? 22 : isExtraLife ? 20 : 16)}px Orbitron, monospace`;
         ctx.textAlign = 'center';
-        ctx.shadowBlur = isExtraLife ? 14 : 8;
-        ctx.shadowColor = isExtraLife ? '#44FF88' : '#00d4ff';
+        ctx.shadowBlur = isSkinUnlockMsg ? 20 : isExtraLife ? 14 : 8;
+        ctx.shadowColor = isSkinUnlockMsg ? '#FFAA00' : isExtraLife ? '#44FF88' : '#00d4ff';
         const label = typeof this.pts === 'string' ? this.pts : `+${this.pts}`;
         ctx.fillText(label, this.x, this.y);
         ctx.shadowBlur = 0;
@@ -778,14 +965,15 @@ class Ship {
             alpha = 0.35;
         }
 
-        // Always use ship-idle — thrust sprites have baked-in flame that
-        // covers the particle exhaust. Particles handle the thrust visual.
-        const img = ASSETS['ship-idle'];
-        if (img) {
-            // Additive blend makes the black PNG background invisible
-            drawSpriteAdditive(img, this.x, this.y, size, size, this.angle + Math.PI / 2, alpha);
+        if (currentSkin === 'classic') {
+            const img = ASSETS['ship-idle'];
+            if (img) {
+                drawSpriteAdditive(img, this.x, this.y, size, size, this.angle + Math.PI / 2, alpha);
+            } else {
+                this.drawFallback(alpha);
+            }
         } else {
-            this.drawFallback(alpha);
+            this.drawSkin(alpha);
         }
 
         // Shield visual — glowing ring around ship
@@ -823,24 +1011,105 @@ class Ship {
     }
 
     drawFallback(alpha) {
+        this.drawSkinShape(this.x, this.y, this.angle, alpha, SHIP_SKINS['classic'], this.thrust);
+    }
+
+    drawSkin(alpha) {
+        const skin = SHIP_SKINS[currentSkin];
+
+        // Ghost trail for Phantom
+        if (currentSkin === 'phantom' && shipTrail.length > 1) {
+            for (let i = 0; i < shipTrail.length - 1; i++) {
+                const t = shipTrail[i];
+                const trailAlpha = ((i + 1) / shipTrail.length) * 0.15 * alpha;
+                this.drawSkinShape(t.x, t.y, t.angle, trailAlpha, skin, false);
+            }
+        }
+
+        const mainAlpha = currentSkin === 'phantom' ? alpha * 0.6 : alpha;
+        this.drawSkinShape(this.x, this.y, this.angle, mainAlpha, skin, this.thrust);
+    }
+
+    drawSkinShape(x, y, angle, alpha, skin, showThrust) {
         ctx.save();
-        ctx.translate(this.x, this.y);
-        ctx.rotate(this.angle);
+        ctx.translate(x, y);
+        ctx.rotate(angle);
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = '#4A9EFF';
-        ctx.strokeStyle = '#2E7FD9';
-        ctx.lineWidth = 2;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = skin.glow;
+        ctx.fillStyle = skin.color;
+        ctx.strokeStyle = skin.glow;
+        ctx.lineWidth = 1.5;
+
         ctx.beginPath();
-        ctx.moveTo(S(20), 0);
-        ctx.lineTo(S(-15), S(-12));
-        ctx.lineTo(S(-10), 0);
-        ctx.lineTo(S(-15), S(12));
+        switch (currentSkin) {
+            case 'dart':
+                ctx.moveTo(S(28), 0);
+                ctx.lineTo(S(4), S(-6));
+                ctx.lineTo(S(-14), S(-8));
+                ctx.lineTo(S(-8), 0);
+                ctx.lineTo(S(-14), S(8));
+                ctx.lineTo(S(4), S(6));
+                break;
+            case 'viper':
+                ctx.moveTo(S(22), S(-6));
+                ctx.lineTo(S(10), S(-2));
+                ctx.lineTo(S(-14), S(-13));
+                ctx.lineTo(S(-6), S(-2));
+                ctx.lineTo(S(-10), 0);
+                ctx.lineTo(S(-6), S(2));
+                ctx.lineTo(S(-14), S(13));
+                ctx.lineTo(S(10), S(2));
+                ctx.lineTo(S(22), S(6));
+                ctx.lineTo(S(14), 0);
+                break;
+            case 'phoenix':
+                ctx.moveTo(S(20), 0);
+                ctx.lineTo(S(6), S(-5));
+                ctx.lineTo(S(-6), S(-8));
+                ctx.lineTo(S(-18), S(-18));
+                ctx.lineTo(S(-10), S(-6));
+                ctx.lineTo(S(-14), 0);
+                ctx.lineTo(S(-10), S(6));
+                ctx.lineTo(S(-18), S(18));
+                ctx.lineTo(S(-6), S(8));
+                ctx.lineTo(S(6), S(5));
+                break;
+            case 'phantom':
+                ctx.moveTo(S(20), 0);
+                ctx.lineTo(S(-15), S(-12));
+                ctx.lineTo(S(-10), 0);
+                ctx.lineTo(S(-15), S(12));
+                break;
+            case 'heavy':
+                ctx.moveTo(S(16), 0);
+                ctx.lineTo(S(10), S(-8));
+                ctx.lineTo(S(-4), S(-12));
+                ctx.lineTo(S(-14), S(-14));
+                ctx.lineTo(S(-12), S(-6));
+                ctx.lineTo(S(-16), 0);
+                ctx.lineTo(S(-12), S(6));
+                ctx.lineTo(S(-14), S(14));
+                ctx.lineTo(S(-4), S(12));
+                ctx.lineTo(S(10), S(8));
+                break;
+            default: // classic fallback
+                ctx.moveTo(S(20), 0);
+                ctx.lineTo(S(-15), S(-12));
+                ctx.lineTo(S(-10), 0);
+                ctx.lineTo(S(-15), S(12));
+                break;
+        }
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-        if (this.thrust) {
-            const fl = S(15 + Math.random() * 10);
-            ctx.fillStyle = '#FFA500';
+        ctx.shadowBlur = 0;
+
+        // Thrust flame
+        if (showThrust) {
+            const fl = S(12 + Math.random() * 10);
+            ctx.fillStyle = currentSkin === 'phoenix' ? '#FF4400' : '#FFA500';
+            ctx.globalAlpha = alpha * 0.8;
             ctx.beginPath();
             ctx.moveTo(S(-10), S(-4));
             ctx.lineTo(S(-10) - fl, 0);
@@ -848,6 +1117,7 @@ class Ship {
             ctx.closePath();
             ctx.fill();
         }
+
         ctx.restore();
     }
 
@@ -902,6 +1172,10 @@ class Ship {
         if (this.y < 0) this.y = H();
         if (this.y > H()) this.y = 0;
 
+        // Ghost trail for Phantom skin
+        shipTrail.push({ x: this.x, y: this.y, angle: this.angle });
+        if (shipTrail.length > 8) shipTrail.shift();
+
         this.shootCooldown--;
         const cooldown = activePowerUps['rapid'] ? 5 : 12;
         if (keys[' '] && this.shootCooldown <= 0) {
@@ -911,6 +1185,7 @@ class Ship {
     }
 
     shoot() {
+        skinShotsFired++;
         const bSpeed = S(10);
         const nose = S(22);
 
@@ -1821,6 +2096,8 @@ function defeatBoss() {
     score += boss.points;
     scorePopups.push(new ScorePopup(boss.x, boss.y - S(30), boss.points));
     checkExtraLife();
+    skinBossKills++;
+    checkSkinUpgrade();
 
     // Drop 2 guaranteed power-ups
     for (let i = 0; i < 2; i++) {
@@ -2032,7 +2309,7 @@ function doHyperspace() {
 
 // ── Leaderboard ─────────────────────────────────────────────
 function saveToLeaderboard(name, finalScore, finalLevel) {
-    const entry = { name: name.toUpperCase(), score: finalScore, level: finalLevel, date: Date.now() };
+    const entry = { name: name.toUpperCase(), score: finalScore, level: finalLevel, skin: currentSkin, date: Date.now() };
 
     // Save locally immediately (instant feedback)
     leaderboard.push(entry);
@@ -2041,25 +2318,22 @@ function saveToLeaderboard(name, finalScore, finalLevel) {
     localStorage.setItem('asteroids-leaderboard', JSON.stringify(leaderboard));
 
     // Push to Supabase (fire and forget — don't block the game)
+    const headers = {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'return=minimal'
+    };
+    const bodyWithSkin = { player_name: entry.name, score: entry.score, level: entry.level, ship_skin: entry.skin };
+    const bodyNoSkin = { player_name: entry.name, score: entry.score, level: entry.level };
     fetch(`${SUPABASE_URL}/rest/v1/leaderboard`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'apikey': SUPABASE_KEY,
-            'Authorization': `Bearer ${SUPABASE_KEY}`,
-            'Prefer': 'return=minimal'
-        },
-        body: JSON.stringify({
-            player_name: entry.name,
-            score: entry.score,
-            level: entry.level
-        })
-    }).then(() => {
-        // After saving, refresh the global leaderboard
-        fetchGlobalLeaderboard();
-    }).catch(err => {
-        console.warn('Supabase save failed (score saved locally):', err);
-    });
+        method: 'POST', headers, body: JSON.stringify(bodyWithSkin)
+    }).then(res => {
+        if (!res.ok) return fetch(`${SUPABASE_URL}/rest/v1/leaderboard`, {
+            method: 'POST', headers, body: JSON.stringify(bodyNoSkin)
+        });
+    }).then(() => fetchGlobalLeaderboard())
+    .catch(err => console.warn('Supabase save failed (score saved locally):', err));
 }
 
 async function fetchGlobalLeaderboard() {
@@ -2067,7 +2341,7 @@ async function fetchGlobalLeaderboard() {
     leaderboardError = false;
     try {
         const res = await fetch(
-            `${SUPABASE_URL}/rest/v1/leaderboard?select=player_name,score,level,created_at&order=score.desc&limit=10`,
+            `${SUPABASE_URL}/rest/v1/leaderboard?select=player_name,score,level,ship_skin,created_at&order=score.desc&limit=10`,
             { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2077,6 +2351,7 @@ async function fetchGlobalLeaderboard() {
             name: row.player_name,
             score: row.score,
             level: row.level,
+            skin: row.ship_skin || 'classic',
             date: new Date(row.created_at).getTime()
         }));
         localStorage.setItem('asteroids-leaderboard', JSON.stringify(leaderboard));
@@ -2098,7 +2373,8 @@ function updateStartScreenLeaderboard() {
     table.innerHTML = top5.map((e, i) => {
         const rank = i + 1;
         const color = rank === 1 ? '#78fff5' : 'rgba(255,255,255,0.6)';
-        return `<tr style="color:${color}"><td style="padding:2px 8px;text-align:right">${rank}.</td><td style="padding:2px 8px">${e.name}</td><td style="padding:2px 8px;text-align:right">${e.score.toLocaleString()}</td><td style="padding:2px 8px;color:rgba(255,255,255,0.35)">LV${e.level}</td></tr>`;
+        const skinColor = (SHIP_SKINS[e.skin] || SHIP_SKINS['classic']).color;
+        return `<tr style="color:${color}"><td style="padding:2px 8px;text-align:right">${rank}.</td><td style="padding:2px 4px"><span style="display:inline-block;width:8px;height:8px;background:${skinColor};border-radius:2px;vertical-align:middle;box-shadow:0 0 4px ${skinColor}"></span></td><td style="padding:2px 8px">${e.name}</td><td style="padding:2px 8px;text-align:right">${e.score.toLocaleString()}</td><td style="padding:2px 8px;color:rgba(255,255,255,0.35)">LV${e.level}</td></tr>`;
     }).join('');
 }
 
@@ -2146,6 +2422,14 @@ function init() {
     boss = null;
     bossActive = false;
     nextExtraLife = 10000;
+    currentSkin = 'classic';
+    unlockedSkins = new Set(['classic']);
+    skinAsteroidKills = 0;
+    skinUfoKills = 0;
+    skinBossKills = 0;
+    skinShotsFired = 0;
+    skinShotsHit = 0;
+    shipTrail = [];
     enteringName = false;
     playerName = '';
     nameSubmitted = false;
@@ -2199,6 +2483,9 @@ function checkCollisions() {
 
                 // Track consecutive hits for power-up drops
                 consecutiveHits++;
+                skinAsteroidKills++;
+                skinShotsHit++;
+                checkSkinUpgrade();
 
                 // Power-up drop check
                 if (shouldDropPowerUp(aSize)) {
@@ -2245,6 +2532,9 @@ function checkCollisions() {
                 scorePopups.push(new ScorePopup(ux, uy - S(15), pts));
                 checkExtraLife();
                 consecutiveHits++;
+                skinUfoKills++;
+                skinShotsHit++;
+                checkSkinUpgrade();
 
                 // UFOs have a high power-up drop chance (40%)
                 if (Math.random() < 0.4) {
@@ -2497,6 +2787,7 @@ function update() {
     // Level complete
     if (asteroids.length === 0 && !levelTransition && !bossActive) {
         level++;
+        checkSkinUpgrade();
         levelTransition = true;
         if (level % 5 === 0) {
             levelTransitionTimer = 150;
@@ -2750,6 +3041,11 @@ function draw() {
                     const name = entry.name.padEnd(10);
                     const sc = String(entry.score).padStart(6);
                     const lv = `LV${entry.level}`;
+                    // Ship icon
+                    const entrySkin = entry.skin || 'classic';
+                    drawMiniShip(cx - S(140), H() / 2 + yOff - S(3), entrySkin, S(6));
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = isCurrentScore ? '#78fff5' : 'rgba(255,255,255,0.6)';
                     ctx.fillText(`${rank} ${name} ${sc}  ${lv}`, cx, H() / 2 + yOff);
                     yOff += S(18);
                 }
@@ -2837,9 +3133,16 @@ document.addEventListener('click', () => {
 canvas.setAttribute('tabindex', '0');
 canvas.focus();
 
+// Animated loading screen loop
+requestAnimationFrame(function loadingLoop() {
+    drawLoadingScreen();
+    if (!assetsLoaded) requestAnimationFrame(loadingLoop);
+});
+
 // Load assets with progress, then start
 loadAssets((loaded, total) => {
-    drawLoadingScreen(loaded, total);
+    loadingLoaded = loaded;
+    loadingTotal = total;
 }).then(() => {
     console.log('Assets loaded:', Object.keys(ASSETS).length, '/', Object.keys(ASSET_LIST).length);
     generateStars();

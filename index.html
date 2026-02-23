@@ -354,13 +354,11 @@
         }
       }
 
-      btnMute?.addEventListener("click", () => setSound(!window.__ASTEROIDS_SOUND_ON__));
+      btnMute?.addEventListener("click", () => { setSound(!window.__ASTEROIDS_SOUND_ON__); btnMute.blur(); });
 
       btnReset?.addEventListener("click", () => {
-        // Dispatch an event your game.js can listen for if you want.
+        btnReset.blur();
         window.dispatchEvent(new Event("asteroids:reset"));
-        // If not handled, at least refresh is a guaranteed reset.
-        // Comment out the line below once you implement a proper reset handler.
         location.reload();
       });
 
