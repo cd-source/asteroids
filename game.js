@@ -206,6 +206,38 @@ let particles = [];
 let explosions = [];
 let shockwaves = [];
 let scorePopups = [];
+
+// ── Performance Infrastructure ──────────────────────────────
+const MAX_PARTICLES = 300;
+let _vignetteCache = null;
+let _vignetteCacheW = 0;
+let _vignetteCacheH = 0;
+let _starCache = null;
+let _starCacheLevel = -1;
+let _starCacheW = 0;
+let _starCacheH = 0;
+const EXPLOSION_COLORS = [];
+(function() {
+    for (let i = 0; i < 60; i++) {
+        const t = i / 59;
+        let r, g, b;
+        if (t > 0.7) { r = 255; g = 255; b = 200 + Math.floor(55 * ((t - 0.7) / 0.3)); }
+        else if (t > 0.4) { r = 255; g = Math.floor(180 + 75 * ((t - 0.4) / 0.3)); b = 50; }
+        else { r = 200 + Math.floor(55 * (t / 0.4)); g = Math.floor(80 * (t / 0.4)); b = 20; }
+        EXPLOSION_COLORS.push(`rgb(${r},${g},${b})`);
+    }
+})();
+function compactArray(arr, keepFn) {
+    let write = 0;
+    for (let read = 0; read < arr.length; read++) {
+        if (keepFn(arr[read])) {
+            if (write !== read) arr[write] = arr[read];
+            write++;
+        }
+    }
+    arr.length = write;
+}
+
 let score = 0;
 let highScore = parseInt(localStorage.getItem('asteroids-highscore')) || 0;
 let lives = 3;
@@ -304,8 +336,14 @@ const LEVEL_PALETTES = [
     { name: 'Ghost Sector',    tint: 'rgba(255,255,255,0.15)', starColor: '#E0E0E0', uiAccent: '#CCCCCC' }, // Level 8: white/grey
 ];
 
+let _cachedPalette = null;
+let _cachedPaletteLevel = -1;
 function getLevelPalette() {
-    return LEVEL_PALETTES[(level - 1) % LEVEL_PALETTES.length];
+    if (level !== _cachedPaletteLevel) {
+        _cachedPaletteLevel = level;
+        _cachedPalette = LEVEL_PALETTES[(level - 1) % LEVEL_PALETTES.length];
+    }
+    return _cachedPalette;
 }
 
 // Static star field (classic Asteroids style)
@@ -1144,6 +1182,7 @@ class Ship {
             // Thrust particles — emit 2-3 per frame for a dense exhaust stream
             const numP = 2 + (Math.random() > 0.5 ? 1 : 0);
             for (let i = 0; i < numP; i++) {
+                if (particles.length >= MAX_PARTICLES) break;
                 const spread = (Math.random() - 0.5) * 0.6;
                 const pa = this.angle + Math.PI + spread;
                 const spd = S(1.5 + Math.random() * 2.5);
@@ -1369,19 +1408,13 @@ class Particle {
 
     draw() {
         const t = this.life / this.maxLife;
-        const sz = this.type === 'spark' ? S(10) : S(8);
-
-        ctx.save();
         if (this.type === 'thrust') {
-            // Hot exhaust particles: white core → orange → dim red
             const r = S(1.5 + 2 * t);
             ctx.globalAlpha = t * 0.9;
-            // Outer glow
             ctx.fillStyle = t > 0.6 ? '#FFA500' : t > 0.3 ? '#FF6600' : '#882200';
             ctx.beginPath();
             ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
             ctx.fill();
-            // Hot white core on fresh particles
             if (t > 0.7) {
                 ctx.globalAlpha = (t - 0.7) * 3;
                 ctx.fillStyle = '#FFEECC';
@@ -1397,14 +1430,13 @@ class Particle {
             ctx.arc(this.x, this.y, r, 0, Math.PI * 2);
             ctx.fill();
         } else {
-            // spark
             ctx.globalAlpha = t;
             ctx.fillStyle = '#FFD700';
             ctx.beginPath();
             ctx.arc(this.x, this.y, S(1.5), 0, Math.PI * 2);
             ctx.fill();
         }
-        ctx.restore();
+        ctx.globalAlpha = 1;
     }
 
     update() {
@@ -1424,7 +1456,7 @@ class Explosion {
         this.done = false;
         this.particles = [];
         // Scale particle count and speed by explosion size
-        const count = Math.floor(size / S(3));
+        const count = Math.min(40, Math.floor(size / S(3)));
         const maxSpeed = size / S(12);
         for (let i = 0; i < count; i++) {
             const angle = Math.random() * Math.PI * 2;
@@ -1446,15 +1478,10 @@ class Explosion {
         for (const p of this.particles) {
             if (p.life <= 0) continue;
             const t = p.life / p.maxLife;
-            // Color: white → yellow → orange → dim red as it fades
-            let r, g, b;
-            if (t > 0.7) { r = 255; g = 255; b = 200 + Math.floor(55 * ((t - 0.7) / 0.3)); }
-            else if (t > 0.4) { r = 255; g = Math.floor(180 + 75 * ((t - 0.4) / 0.3)); b = 50; }
-            else { r = 200 + Math.floor(55 * (t / 0.4)); g = Math.floor(80 * (t / 0.4)); b = 20; }
             const alpha = Math.min(1, t * 1.5);
             const sz = p.radius * (0.3 + t * 0.7);
             ctx.globalAlpha = alpha;
-            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillStyle = EXPLOSION_COLORS[Math.min(59, Math.floor(t * 59))];
             ctx.beginPath();
             ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
             ctx.fill();
@@ -2461,8 +2488,9 @@ function checkCollisions() {
     // Bullets vs Asteroids
     for (let i = bullets.length - 1; i >= 0; i--) {
         for (let j = asteroids.length - 1; j >= 0; j--) {
-            const dist = Math.hypot(bullets[i].x - asteroids[j].x, bullets[i].y - asteroids[j].y);
-            if (dist < asteroids[j].radius + S(4)) {
+            const dx = bullets[i].x - asteroids[j].x, dy = bullets[i].y - asteroids[j].y;
+            const threshold = asteroids[j].radius + S(4);
+            if (dx * dx + dy * dy < threshold * threshold) {
                 const ax = asteroids[j].x;
                 const ay = asteroids[j].y;
                 const aSize = asteroids[j].size;
@@ -2515,8 +2543,9 @@ function checkCollisions() {
     // Player Bullets vs UFOs
     for (let i = bullets.length - 1; i >= 0; i--) {
         for (let j = ufos.length - 1; j >= 0; j--) {
-            const dist = Math.hypot(bullets[i].x - ufos[j].x, bullets[i].y - ufos[j].y);
-            if (dist < ufos[j].radius + S(4)) {
+            const dx = bullets[i].x - ufos[j].x, dy = bullets[i].y - ufos[j].y;
+            const threshold = ufos[j].radius + S(4);
+            if (dx * dx + dy * dy < threshold * threshold) {
                 const ux = ufos[j].x;
                 const uy = ufos[j].y;
                 const uType = ufos[j].type;
@@ -2558,8 +2587,9 @@ function checkCollisions() {
     // Player Bullets vs Boss
     if (bossActive && boss) {
         for (let i = bullets.length - 1; i >= 0; i--) {
-            const dist = Math.hypot(bullets[i].x - boss.x, bullets[i].y - boss.y);
-            if (dist < boss.radius + S(4)) {
+            const dx = bullets[i].x - boss.x, dy = bullets[i].y - boss.y;
+            const threshold = boss.radius + S(4);
+            if (dx * dx + dy * dy < threshold * threshold) {
                 bullets.splice(i, 1);
                 boss.takeDamage();
                 if (boss.hp <= 0) {
@@ -2573,8 +2603,9 @@ function checkCollisions() {
     // UFO Bullets vs Ship
     if (!invincible && ship) {
         for (let i = ufoBullets.length - 1; i >= 0; i--) {
-            const dist = Math.hypot(ship.x - ufoBullets[i].x, ship.y - ufoBullets[i].y);
-            if (dist < ship.radius + ufoBullets[i].radius) {
+            const dx = ship.x - ufoBullets[i].x, dy = ship.y - ufoBullets[i].y;
+            const threshold = ship.radius + ufoBullets[i].radius;
+            if (dx * dx + dy * dy < threshold * threshold) {
                 ufoBullets.splice(i, 1);
 
                 // Shield absorbs UFO bullets too
@@ -2635,8 +2666,9 @@ function checkCollisions() {
     // Asteroids vs UFOs — asteroids destroy UFOs on contact
     for (let i = ufos.length - 1; i >= 0; i--) {
         for (let j = asteroids.length - 1; j >= 0; j--) {
-            const dist = Math.hypot(ufos[i].x - asteroids[j].x, ufos[i].y - asteroids[j].y);
-            if (dist < ufos[i].radius + asteroids[j].radius) {
+            const dx = ufos[i].x - asteroids[j].x, dy = ufos[i].y - asteroids[j].y;
+            const threshold = ufos[i].radius + asteroids[j].radius;
+            if (dx * dx + dy * dy < threshold * threshold) {
                 const ux = ufos[i].x;
                 const uy = ufos[i].y;
                 explosions.push(new Explosion(ux, uy, S(80)));
@@ -2657,8 +2689,9 @@ function checkCollisions() {
     // Ship vs Asteroids
     if (!invincible && ship) {
         for (let i = asteroids.length - 1; i >= 0; i--) {
-            const dist = Math.hypot(ship.x - asteroids[i].x, ship.y - asteroids[i].y);
-            if (dist < ship.radius + asteroids[i].radius) {
+            const dx = ship.x - asteroids[i].x, dy = ship.y - asteroids[i].y;
+            const threshold = ship.radius + asteroids[i].radius;
+            if (dx * dx + dy * dy < threshold * threshold) {
 
                 // Shield absorbs the hit
                 if (hasShield) {
@@ -2736,13 +2769,13 @@ function update() {
         stopThrust();
         stopUfoHum();
         explosions.forEach(e => e.update());
-        explosions = explosions.filter(e => !e.done);
+        compactArray(explosions, e => !e.done);
         shockwaves.forEach(s => s.update());
-        shockwaves = shockwaves.filter(s => !s.done);
+        compactArray(shockwaves, s => !s.done);
         particles.forEach(p => p.update());
-        particles = particles.filter(p => p.life > 0);
+        compactArray(particles, p => p.life > 0);
         scorePopups.forEach(p => p.update());
-        scorePopups = scorePopups.filter(p => p.life > 0);
+        compactArray(scorePopups, p => p.life > 0);
         return;
     }
 
@@ -2761,9 +2794,9 @@ function update() {
         }
         // Still update VFX during transition
         particles.forEach(p => p.update());
-        particles = particles.filter(p => p.life > 0);
+        compactArray(particles, p => p.life > 0);
         scorePopups.forEach(p => p.update());
-        scorePopups = scorePopups.filter(p => p.life > 0);
+        compactArray(scorePopups, p => p.life > 0);
         return;
     }
 
@@ -2778,11 +2811,11 @@ function update() {
     updateUfos();
     if (bossActive && boss) boss.update();
 
-    bullets = bullets.filter(b => b.life > 0);
-    particles = particles.filter(p => p.life > 0);
-    explosions = explosions.filter(e => !e.done);
-    shockwaves = shockwaves.filter(s => !s.done);
-    scorePopups = scorePopups.filter(p => p.life > 0);
+    compactArray(bullets, b => b.life > 0);
+    compactArray(particles, p => p.life > 0);
+    compactArray(explosions, e => !e.done);
+    compactArray(shockwaves, s => !s.done);
+    compactArray(scorePopups, p => p.life > 0);
 
     checkCollisions();
 
@@ -2826,11 +2859,22 @@ function drawBackground() {
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, W(), H());
 
+    const cw = W(), ch = H();
     const palette = getLevelPalette();
-    ctx.fillStyle = palette.starColor;
-    for (const star of STARS) {
-        ctx.fillRect(star.x, star.y, star.size, star.size);
+    if (!_starCache || _starCacheLevel !== level || _starCacheW !== cw || _starCacheH !== ch) {
+        _starCache = document.createElement('canvas');
+        _starCache.width = cw;
+        _starCache.height = ch;
+        const sCtx = _starCache.getContext('2d');
+        sCtx.fillStyle = palette.starColor;
+        for (const star of STARS) {
+            sCtx.fillRect(star.x, star.y, star.size, star.size);
+        }
+        _starCacheLevel = level;
+        _starCacheW = cw;
+        _starCacheH = ch;
     }
+    ctx.drawImage(_starCache, 0, 0);
 }
 
 // ── Power-Up HUD ────────────────────────────────────────────
@@ -2926,13 +2970,23 @@ function draw() {
 
     ctx.restore(); // end screen shake
 
-    // Vignette overlay
+    // Vignette overlay (cached to offscreen canvas)
     const vig = ASSETS['overlay-vignette'];
     if (vig) {
+        const cw = W(), ch = H();
+        if (!_vignetteCache || _vignetteCacheW !== cw || _vignetteCacheH !== ch) {
+            _vignetteCache = document.createElement('canvas');
+            _vignetteCache.width = cw;
+            _vignetteCache.height = ch;
+            const vCtx = _vignetteCache.getContext('2d');
+            vCtx.drawImage(vig, 0, 0, cw, ch);
+            _vignetteCacheW = cw;
+            _vignetteCacheH = ch;
+        }
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';
         ctx.globalAlpha = 0.35;
-        ctx.drawImage(vig, 0, 0, W(), H());
+        ctx.drawImage(_vignetteCache, 0, 0);
         ctx.restore();
     }
 
