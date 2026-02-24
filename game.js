@@ -3156,7 +3156,7 @@ window.addEventListener('resize', () => {
     generateStars();
 });
 
-// ── Mobile Touch Controls ───────────────────────────────────
+// ── Mobile Touch Controls — Virtual Joystick ────────────────
 (function() {
     const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
     const touchControls = document.getElementById('touchControls');
@@ -3164,15 +3164,103 @@ window.addEventListener('resize', () => {
 
     touchControls.style.display = 'block';
 
-    const mappings = {
-        'touchLeft': 'ArrowLeft',
-        'touchRight': 'ArrowRight',
-        'touchThrust': 'ArrowUp',
-        'touchFire': ' ',
-        'touchHyper': 'Tab'
-    };
+    // ── Virtual Joystick (left half of screen) ──
+    const joystickZone = document.getElementById('joystickZone');
+    const joystickBase = document.getElementById('joystickBase');
+    const joystickKnob = document.getElementById('joystickKnob');
 
-    for (const [id, key] of Object.entries(mappings)) {
+    let joyTouchId = null;
+    let joyOriginX = 0;
+    let joyOriginY = 0;
+    let joyZoneRect = null;
+    const JOY_MAX = 55;   // max drag radius (px)
+    const DEAD_ZONE = 15;  // ignore input within this radius
+
+    function joyToZone(cx, cy) {
+        return { x: cx - joyZoneRect.left, y: cy - joyZoneRect.top };
+    }
+
+    function updateJoystick(cx, cy) {
+        const dx = cx - joyOriginX;
+        const dy = cy - joyOriginY;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Clamp knob to max radius
+        let kx = cx, ky = cy;
+        if (dist > JOY_MAX) {
+            kx = joyOriginX + (dx / dist) * JOY_MAX;
+            ky = joyOriginY + (dy / dist) * JOY_MAX;
+        }
+        const pos = joyToZone(kx, ky);
+        joystickKnob.style.left = pos.x + 'px';
+        joystickKnob.style.top  = pos.y + 'px';
+
+        // Map direction to keys
+        keys['ArrowLeft']  = false;
+        keys['ArrowRight'] = false;
+        keys['ArrowUp']    = false;
+
+        if (dist > DEAD_ZONE) {
+            if (dx < -DEAD_ZONE) keys['ArrowLeft']  = true;
+            if (dx >  DEAD_ZONE) keys['ArrowRight'] = true;
+            if (dy < -DEAD_ZONE) keys['ArrowUp']    = true;  // up = negative Y
+        }
+    }
+
+    function hideJoystick() {
+        joystickBase.style.display = 'none';
+        joystickKnob.style.display = 'none';
+        joyTouchId = null;
+        keys['ArrowLeft']  = false;
+        keys['ArrowRight'] = false;
+        keys['ArrowUp']    = false;
+    }
+
+    joystickZone.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        if (joyTouchId !== null) return; // already tracking
+
+        const t = e.changedTouches[0];
+        joyTouchId = t.identifier;
+        joyOriginX = t.clientX;
+        joyOriginY = t.clientY;
+        joyZoneRect = joystickZone.getBoundingClientRect();
+
+        const pos = joyToZone(t.clientX, t.clientY);
+        joystickBase.style.display = 'block';
+        joystickBase.style.left = pos.x + 'px';
+        joystickBase.style.top  = pos.y + 'px';
+        joystickKnob.style.display = 'block';
+        joystickKnob.style.left = pos.x + 'px';
+        joystickKnob.style.top  = pos.y + 'px';
+
+        // Start game on touch if needed
+        if (!gameStarted && !gameOver) { initAudio(); init(); }
+        else if (gameOver && !enteringName) init();
+    }, { passive: false });
+
+    joystickZone.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        for (const t of e.changedTouches) {
+            if (t.identifier === joyTouchId) {
+                updateJoystick(t.clientX, t.clientY);
+                break;
+            }
+        }
+    }, { passive: false });
+
+    joystickZone.addEventListener('touchend', (e) => {
+        for (const t of e.changedTouches) {
+            if (t.identifier === joyTouchId) { hideJoystick(); break; }
+        }
+    }, { passive: false });
+
+    joystickZone.addEventListener('touchcancel', () => { hideJoystick(); });
+
+    // ── Right-side buttons (Fire + Warp) ──
+    const btnMap = { 'touchFire': ' ', 'touchHyper': 'Tab' };
+
+    for (const [id, key] of Object.entries(btnMap)) {
         const el = document.getElementById(id);
         if (!el) continue;
 
@@ -3180,10 +3268,8 @@ window.addEventListener('resize', () => {
             e.preventDefault();
             keys[key] = true;
             el.classList.add('active');
-            // Start game on touch if not started
             if (!gameStarted && !gameOver) { initAudio(); init(); }
             else if (gameOver && !enteringName) init();
-            // Hyperspace
             if (key === 'Tab' && gameStarted && !gameOver) doHyperspace();
         }, { passive: false });
 
@@ -3199,7 +3285,7 @@ window.addEventListener('resize', () => {
         });
     }
 
-    // Also allow tapping the canvas to start
+    // Tap canvas to start (areas not covered by joystick/buttons)
     canvas.addEventListener('touchstart', (e) => {
         if (!gameStarted && !gameOver) { e.preventDefault(); initAudio(); init(); }
         else if (gameOver && !enteringName) { e.preventDefault(); init(); }

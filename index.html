@@ -211,22 +211,57 @@
     #touchControls {
       display: none;
       position: absolute;
+      top: 0;
       bottom: 0;
       left: 0;
       right: 0;
       pointer-events: none;
       z-index: 10;
     }
-    .touch-zone {
+    /* Virtual joystick — left half of screen */
+    #joystickZone {
+      pointer-events: auto;
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 50%;
+      height: 100%;
+      touch-action: none;
+    }
+    #joystickBase {
+      display: none;
+      position: absolute;
+      width: 120px;
+      height: 120px;
+      margin-left: -60px;
+      margin-top: -60px;
+      border-radius: 50%;
+      border: 2px solid rgba(120, 255, 245, 0.2);
+      background: rgba(8, 12, 20, 0.3);
+      pointer-events: none;
+    }
+    #joystickKnob {
+      display: none;
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      margin-left: -24px;
+      margin-top: -24px;
+      border-radius: 50%;
+      background: rgba(120, 255, 245, 0.25);
+      border: 2px solid rgba(120, 255, 245, 0.5);
+      pointer-events: none;
+    }
+    .touch-zone-right {
       pointer-events: auto;
       display: flex;
-      gap: 8px;
+      flex-direction: column;
       align-items: flex-end;
+      gap: 8px;
       position: absolute;
       bottom: 14px;
+      right: 12px;
     }
-    .touch-zone-left { left: 12px; }
-    .touch-zone-right { right: 12px; flex-direction: column; align-items: flex-end; }
     .touch-btn {
       appearance: none;
       border: 2px solid rgba(120, 255, 245, 0.3);
@@ -249,7 +284,6 @@
       background: rgba(120, 255, 245, 0.2);
       border-color: rgba(120, 255, 245, 0.6);
     }
-    .touch-btn.touch-thrust { margin-bottom: 4px; }
     .touch-btn.touch-fire {
       width: 68px;
       height: 68px;
@@ -323,12 +357,11 @@
 
     <!-- Touch Controls (auto-shown on touch devices) -->
     <div id="touchControls">
-      <div class="touch-zone touch-zone-left">
-        <button class="touch-btn" id="touchLeft" aria-label="Rotate Left">&#9664;</button>
-        <button class="touch-btn touch-thrust" id="touchThrust" aria-label="Thrust">&#9650;</button>
-        <button class="touch-btn" id="touchRight" aria-label="Rotate Right">&#9654;</button>
+      <div id="joystickZone">
+        <div id="joystickBase"></div>
+        <div id="joystickKnob"></div>
       </div>
-      <div class="touch-zone touch-zone-right">
+      <div class="touch-zone-right">
         <button class="touch-btn touch-fire" id="touchFire" aria-label="Fire">FIRE</button>
         <button class="touch-btn touch-small" id="touchHyper" aria-label="Hyperspace">WARP</button>
       </div>
