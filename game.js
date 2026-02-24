@@ -2897,6 +2897,9 @@ function draw() {
         ctx.translate(sx, sy);
     }
 
+    // Boost brightness 25% across all game assets
+    ctx.filter = 'brightness(1.25)';
+
     drawBackground();
 
     // Game objects (back to front)
@@ -2924,7 +2927,7 @@ function draw() {
     if (vig) {
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';
-        ctx.globalAlpha = 0.45;
+        ctx.globalAlpha = 0.35;
         ctx.drawImage(vig, 0, 0, W(), H());
         ctx.restore();
     }
