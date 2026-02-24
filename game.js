@@ -76,7 +76,14 @@ function loadAssets(onProgress) {
         keys.forEach(key => {
             const img = new Image();
             img.onload = () => {
-                ASSETS[key] = img;
+                // Pre-brighten asset once (avoids costly per-frame ctx.filter)
+                const c = document.createElement('canvas');
+                c.width = img.width;
+                c.height = img.height;
+                const bctx = c.getContext('2d');
+                bctx.filter = 'brightness(1.25)';
+                bctx.drawImage(img, 0, 0);
+                ASSETS[key] = c;
                 loaded++;
                 if (onProgress) onProgress(loaded, total);
                 if (loaded >= total) { assetsLoaded = true; resolve(); }
@@ -2896,9 +2903,6 @@ function draw() {
         const sy = (Math.random() - 0.5) * screenShake * 2;
         ctx.translate(sx, sy);
     }
-
-    // Boost brightness 25% across all game assets
-    ctx.filter = 'brightness(1.25)';
 
     drawBackground();
 
