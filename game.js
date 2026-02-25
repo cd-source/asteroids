@@ -1289,8 +1289,8 @@ class Asteroid {
         this.size = size; // 3=large, 2=medium, 1=small
         this.radius = S(size === 3 ? 45 : size === 2 ? 30 : 28);
         const angle = Math.random() * Math.PI * 2;
-        // Speed scales with level: +12% per level, capped at 3x base speed
-        const levelSpeedMult = Math.min(3, 1 + (level - 1) * 0.12);
+        // Speed scales with level: +5% per level, capped at 1.8x base speed
+        const levelSpeedMult = Math.min(1.8, 1 + (level - 1) * 0.05);
         const baseSpeed = (4 - size) * 0.5 + Math.random();
         const speed = S(baseSpeed * levelSpeedMult);
         this.velocity = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
