@@ -185,6 +185,92 @@
       color: rgba(255,255,255,0.78);
     }
 
+    .profile-panel {
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(120, 255, 245, 0.12);
+      text-align: left;
+    }
+
+    .profile-panel-title {
+      color: #78fff5;
+      font-family: Orbitron, monospace;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      margin: 0 0 10px;
+      text-align: center;
+    }
+
+    .profile-stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .profile-stat {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      color: rgba(255,255,255,0.72);
+    }
+
+    .profile-stat b {
+      color: rgba(255,255,255,0.96);
+      font-family: Orbitron, monospace;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+    }
+
+    .profile-skins {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .profile-skin {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: rgba(255,255,255,0.82);
+    }
+
+    .profile-skin.locked {
+      opacity: 0.45;
+    }
+
+    .profile-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex: 0 0 10px;
+    }
+
+    .profile-note {
+      margin-top: 10px;
+      text-align: center;
+      color: rgba(255,255,255,0.42);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
     /* Subtle overlays (vignette / grain) */
     .overlay {
       position: absolute;
@@ -205,6 +291,7 @@
       #ui { top: 10px; left: 10px; right: 10px; }
       .pill { padding: 9px 10px; font-size: 12px; }
       .btn { padding: 9px 10px; font-size: 12px; }
+      .profile-stats { grid-template-columns: 1fr; }
     }
 
     /* Touch controls */
@@ -344,6 +431,12 @@
           <table id="startLeaderboardTable" style="margin: 0 auto; border-collapse: collapse; font-family: monospace; font-size: 12px; color: rgba(255,255,255,0.6); letter-spacing: 0.04em;">
           </table>
         </div>
+        <div class="profile-panel">
+          <p class="profile-panel-title">LOCAL PILOT PROFILE</p>
+          <div id="profileStats" class="profile-stats"></div>
+          <div id="profileSkins" class="profile-skins"></div>
+          <p class="profile-note">Saved on this browser only. Shift + Reset clears the local save.</p>
+        </div>
         <p style="margin-top: 18px; font-size: 11px; letter-spacing: 0.08em; color: rgba(255,255,255,0.35);">
           An Edenic Labs game. Created using
           <a href="https://gee.edenic.ai/" target="_blank" rel="noopener" style="color: rgba(120, 255, 245, 0.5); text-decoration: none; pointer-events: auto;">Gee-Code</a> &amp;
@@ -389,8 +482,19 @@
 
       btnMute?.addEventListener("click", () => { setSound(!window.__ASTEROIDS_SOUND_ON__); btnMute.blur(); });
 
-      btnReset?.addEventListener("click", () => {
+      btnReset?.addEventListener("click", (e) => {
         btnReset.blur();
+        if (e.shiftKey) {
+          const confirmed = window.confirm("Clear local progression, local high score, and cached leaderboard for this browser?");
+          if (!confirmed) return;
+          if (typeof window.__ASTEROIDS_CLEAR_LOCAL_PROFILE__ === "function") {
+            window.__ASTEROIDS_CLEAR_LOCAL_PROFILE__();
+          } else {
+            localStorage.removeItem("asteroids-profile-v1");
+            localStorage.removeItem("asteroids-highscore");
+            localStorage.removeItem("asteroids-leaderboard");
+          }
+        }
         window.dispatchEvent(new Event("asteroids:reset"));
         location.reload();
       });
@@ -403,7 +507,7 @@
       // Show high score on start screen
       const hs = parseInt(localStorage.getItem("asteroids-highscore")) || 0;
       const hsEl = document.getElementById("highscoreDisplay");
-      if (hs > 0 && hsEl) hsEl.textContent = "BEST: " + hs;
+      if (hs > 0 && hsEl) hsEl.textContent = "BEST: " + hs.toLocaleString();
     })();
   </script>
 

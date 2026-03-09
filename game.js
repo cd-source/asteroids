@@ -7,6 +7,102 @@ const scoreEl = document.getElementById('score');
 const livesEl = document.getElementById('lives');
 const levelEl = document.getElementById('level');
 const messageEl = document.getElementById('message');
+const highScoreDisplayEl = document.getElementById('highscoreDisplay');
+const profileStatsEl = document.getElementById('profileStats');
+const profileSkinsEl = document.getElementById('profileSkins');
+
+const PROFILE_STORAGE_KEY = 'asteroids-profile-v1';
+const PROFILE_VERSION = 1;
+
+function createPlayerId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+    }
+    return `pilot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toNumber(value, fallback = 0) {
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function createDefaultProgression() {
+    const now = Date.now();
+    return {
+        version: PROFILE_VERSION,
+        playerId: createPlayerId(),
+        createdAt: now,
+        updatedAt: now,
+        stats: {
+            runsStarted: 0,
+            runsFinished: 0,
+            totalScore: 0,
+            totalAsteroidsDestroyed: 0,
+            totalUfosDestroyed: 0,
+            totalBossesDefeated: 0,
+            highestLevel: 1,
+            bestScore: 0,
+            bestLevel: 1,
+            bestAccuracy: 0,
+            bestAccuracyShots: 0
+        },
+        unlocks: {
+            skins: ['classic']
+        }
+    };
+}
+
+function normalizeProgression(raw) {
+    const defaults = createDefaultProgression();
+    if (!raw || typeof raw !== 'object') return defaults;
+
+    const rawStats = raw.stats && typeof raw.stats === 'object' ? raw.stats : {};
+    const rawUnlocks = raw.unlocks && typeof raw.unlocks === 'object' ? raw.unlocks : {};
+    const skins = Array.isArray(rawUnlocks.skins) ? rawUnlocks.skins.filter(name => typeof name === 'string') : ['classic'];
+    if (!skins.includes('classic')) skins.unshift('classic');
+
+    return {
+        version: PROFILE_VERSION,
+        playerId: typeof raw.playerId === 'string' && raw.playerId ? raw.playerId : defaults.playerId,
+        createdAt: toNumber(raw.createdAt, defaults.createdAt),
+        updatedAt: toNumber(raw.updatedAt, defaults.updatedAt),
+        stats: {
+            runsStarted: toNumber(rawStats.runsStarted, 0),
+            runsFinished: toNumber(rawStats.runsFinished, 0),
+            totalScore: toNumber(rawStats.totalScore, 0),
+            totalAsteroidsDestroyed: toNumber(rawStats.totalAsteroidsDestroyed, 0),
+            totalUfosDestroyed: toNumber(rawStats.totalUfosDestroyed, 0),
+            totalBossesDefeated: toNumber(rawStats.totalBossesDefeated, 0),
+            highestLevel: Math.max(1, toNumber(rawStats.highestLevel, 1)),
+            bestScore: Math.max(0, toNumber(rawStats.bestScore, 0)),
+            bestLevel: Math.max(1, toNumber(rawStats.bestLevel, 1)),
+            bestAccuracy: Math.max(0, Math.min(1, toNumber(rawStats.bestAccuracy, 0))),
+            bestAccuracyShots: Math.max(0, toNumber(rawStats.bestAccuracyShots, 0))
+        },
+        unlocks: {
+            skins: [...new Set(skins)]
+        }
+    };
+}
+
+function loadProgression() {
+    try {
+        const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+        if (!raw) return createDefaultProgression();
+        return normalizeProgression(JSON.parse(raw));
+    } catch (err) {
+        console.warn('Failed to load local progression, resetting profile:', err);
+        return createDefaultProgression();
+    }
+}
+
+let progression = loadProgression();
+let runProgressCommitted = false;
+
+window.__ASTEROIDS_CLEAR_LOCAL_PROFILE__ = function() {
+    localStorage.removeItem(PROFILE_STORAGE_KEY);
+    localStorage.removeItem('asteroids-highscore');
+    localStorage.removeItem('asteroids-leaderboard');
+};
 
 // ── Responsive Canvas ────────────────────────────────────────
 const BASE_W = 960;
@@ -248,6 +344,10 @@ let invincible = false;
 let invincibleTimer = 0;
 let screenShake = 0;
 let frameCount = 0;
+const FIXED_TIMESTEP_MS = 1000 / 60;
+const MAX_CATCH_UP_STEPS = 5;
+let lastFrameTime = null;
+let frameAccumulator = 0;
 
 // Power-ups
 let powerups = [];
@@ -259,7 +359,7 @@ let hasShield = false;
 
 // Ship skins
 let currentSkin = 'classic';
-let unlockedSkins = new Set(['classic']);
+let unlockedSkins = new Set(progression.unlocks.skins || ['classic']);
 let skinAsteroidKills = 0;
 let skinUfoKills = 0;
 let skinBossKills = 0;
@@ -296,7 +396,7 @@ const POWERUP_WEIGHTS = {
     'multi2': 30, 'rapid': 25, 'shield': 20, 'hyperspace': 15, 'sideguns': 7, 'multi3': 3,
 };
 
-// Ship skins — earned through gameplay milestones (per-run, no persistence)
+// Ship skins — permanently earned through local profile milestones
 const SHIP_SKINS = {
     'classic':  { label: 'CLASSIC',  tier: 0, color: '#4A9EFF', glow: '#2E7FD9' },
     'dart':     { label: 'DART',     tier: 1, color: '#00FFCC', glow: '#00AA88' },
@@ -305,6 +405,103 @@ const SHIP_SKINS = {
     'phantom':  { label: 'PHANTOM',  tier: 4, color: '#BB77FF', glow: '#7733CC' },
     'heavy':    { label: 'HEAVY',    tier: 5, color: '#88CC44', glow: '#557722' },
 };
+
+function getHighestUnlockedSkin() {
+    let highestSkin = 'classic';
+    let highestTier = -1;
+    for (const name of unlockedSkins) {
+        const skin = SHIP_SKINS[name];
+        if (skin && skin.tier > highestTier) {
+            highestTier = skin.tier;
+            highestSkin = name;
+        }
+    }
+    return highestSkin;
+}
+
+function getCurrentRunAccuracy() {
+    return skinShotsFired > 0 ? skinShotsHit / skinShotsFired : 0;
+}
+
+function updateProfileUI() {
+    if (highScoreDisplayEl) {
+        highScoreDisplayEl.textContent = highScore > 0 ? `BEST: ${highScore.toLocaleString()}` : 'LOCAL SAVE ACTIVE';
+    }
+
+    if (profileStatsEl) {
+        const stats = progression.stats;
+        profileStatsEl.innerHTML = [
+            `<div class="profile-stat"><span>Best Run</span><b>${stats.bestScore.toLocaleString()}</b></div>`,
+            `<div class="profile-stat"><span>Deepest Level</span><b>LV ${stats.highestLevel}</b></div>`,
+            `<div class="profile-stat"><span>Boss Clears</span><b>${stats.totalBossesDefeated}</b></div>`,
+            `<div class="profile-stat"><span>Runs</span><b>${stats.runsFinished}</b></div>`
+        ].join('');
+    }
+
+    if (profileSkinsEl) {
+        profileSkinsEl.innerHTML = Object.entries(SHIP_SKINS).map(([name, skin]) => {
+            const unlocked = unlockedSkins.has(name);
+            const classes = unlocked ? 'profile-skin unlocked' : 'profile-skin locked';
+            return `<div class="${classes}"><span class="profile-swatch" style="background:${skin.color};box-shadow:0 0 10px ${skin.glow};"></span>${skin.label}</div>`;
+        }).join('');
+    }
+}
+
+function saveProgression() {
+    progression.updatedAt = Date.now();
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(progression));
+    updateProfileUI();
+}
+
+function unlockSkinPermanently(name) {
+    if (progression.unlocks.skins.includes(name)) return;
+    progression.unlocks.skins.push(name);
+    progression.unlocks.skins = [...new Set(progression.unlocks.skins)];
+    saveProgression();
+}
+
+function noteLevelMilestone() {
+    const nextHighest = Math.max(progression.stats.highestLevel, level);
+    if (nextHighest !== progression.stats.highestLevel) {
+        progression.stats.highestLevel = nextHighest;
+        saveProgression();
+    }
+}
+
+function finishRunProgress() {
+    if (runProgressCommitted) return;
+    runProgressCommitted = true;
+
+    progression.stats.runsFinished++;
+    progression.stats.totalScore += score;
+    progression.stats.totalAsteroidsDestroyed += skinAsteroidKills;
+    progression.stats.totalUfosDestroyed += skinUfoKills;
+    progression.stats.totalBossesDefeated += skinBossKills;
+    progression.stats.highestLevel = Math.max(progression.stats.highestLevel, level);
+    progression.stats.bestScore = Math.max(progression.stats.bestScore, score);
+    progression.stats.bestLevel = Math.max(progression.stats.bestLevel, level);
+
+    const runAccuracy = getCurrentRunAccuracy();
+    if (skinShotsFired >= 50 && runAccuracy >= progression.stats.bestAccuracy) {
+        progression.stats.bestAccuracy = runAccuracy;
+        progression.stats.bestAccuracyShots = skinShotsFired;
+    }
+
+    highScore = Math.max(highScore, progression.stats.bestScore);
+    localStorage.setItem('asteroids-highscore', highScore);
+    saveProgression();
+}
+
+if (highScore > progression.stats.bestScore) {
+    progression.stats.bestScore = highScore;
+}
+highScore = Math.max(highScore, progression.stats.bestScore);
+localStorage.setItem('asteroids-highscore', highScore);
+progression.unlocks.skins = progression.unlocks.skins.filter(name => SHIP_SKINS[name]);
+if (!progression.unlocks.skins.includes('classic')) progression.unlocks.skins.unshift('classic');
+unlockedSkins = new Set(progression.unlocks.skins);
+currentSkin = getHighestUnlockedSkin();
+saveProgression();
 
 // Supabase config
 const SUPABASE_URL = 'https://foyctuwcadmlrdsgnsrn.supabase.co';
@@ -796,13 +993,21 @@ function playSkinUnlock() {
 }
 
 function isSkinUnlocked(name) {
+    const totalAsteroids = progression.stats.totalAsteroidsDestroyed + skinAsteroidKills;
+    const totalUfos = progression.stats.totalUfosDestroyed + skinUfoKills;
+    const totalBosses = progression.stats.totalBossesDefeated + skinBossKills;
+    const highestLevelReached = Math.max(progression.stats.highestLevel, level);
+    const runAccuracy = getCurrentRunAccuracy();
+    const bestAccuracy = skinShotsFired >= 50 ? Math.max(progression.stats.bestAccuracy, runAccuracy) : progression.stats.bestAccuracy;
+    const bestAccuracyShots = Math.max(progression.stats.bestAccuracyShots, skinShotsFired >= 50 ? skinShotsFired : 0);
+
     switch (name) {
         case 'classic': return true;
-        case 'dart': return skinAsteroidKills >= 30;
-        case 'viper': return skinUfoKills >= 5;
-        case 'phoenix': return skinBossKills >= 1;
-        case 'phantom': return skinShotsFired >= 50 && (skinShotsHit / skinShotsFired) >= 0.7;
-        case 'heavy': return level >= 10;
+        case 'dart': return totalAsteroids >= 30;
+        case 'viper': return totalUfos >= 5;
+        case 'phoenix': return totalBosses >= 1;
+        case 'phantom': return bestAccuracyShots >= 50 && bestAccuracy >= 0.7;
+        case 'heavy': return highestLevelReached >= 10;
         default: return false;
     }
 }
@@ -816,6 +1021,7 @@ function checkSkinUpgrade() {
         if (isSkinUnlocked(name)) {
             if (!unlockedSkins.has(name)) {
                 unlockedSkins.add(name);
+                unlockSkinPermanently(name);
                 // Show popup for newly unlocked skin
                 if (ship) {
                     scorePopups.push(new ScorePopup(ship.x, ship.y - S(40), `NEW SHIP: ${skin.label}`));
@@ -2145,6 +2351,7 @@ function defeatBoss() {
 
     // Advance to next level
     level++;
+    noteLevelMilestone();
     levelTransition = true;
     levelTransitionTimer = 120;
     levelTransitionText = `LEVEL ${level}`;
@@ -2456,8 +2663,11 @@ function init() {
     boss = null;
     bossActive = false;
     nextExtraLife = 10000;
-    currentSkin = 'classic';
-    unlockedSkins = new Set(['classic']);
+    runProgressCommitted = false;
+    progression.stats.runsStarted++;
+    saveProgression();
+    unlockedSkins = new Set(progression.unlocks.skins);
+    currentSkin = getHighestUnlockedSkin();
     skinAsteroidKills = 0;
     skinUfoKills = 0;
     skinBossKills = 0;
@@ -2644,6 +2854,7 @@ function checkCollisions() {
                 lives--;
 
                 if (lives <= 0) {
+                    finishRunProgress();
                     gameOver = true;
                     enteringName = true;
                     nameSubmitted = false;
@@ -2741,6 +2952,7 @@ function checkCollisions() {
                 lives--;
 
                 if (lives <= 0) {
+                    finishRunProgress();
                     gameOver = true;
                     enteringName = true;
                     nameSubmitted = false;
@@ -2828,6 +3040,7 @@ function update() {
     if (asteroids.length === 0 && !levelTransition && !bossActive) {
         level++;
         checkSkinUpgrade();
+        noteLevelMilestone();
         levelTransition = true;
         if (level % 5 === 0) {
             levelTransitionTimer = 150;
@@ -3050,6 +3263,11 @@ function draw() {
         }
         yOff += S(30);
 
+        ctx.fillStyle = 'rgba(120,255,245,0.75)';
+        ctx.font = `${S(12)}px monospace`;
+        ctx.fillText(`CAREER LV ${progression.stats.highestLevel}  ·  BOSSES ${progression.stats.totalBossesDefeated}  ·  SKINS ${unlockedSkins.size}/${Object.keys(SHIP_SKINS).length}`, cx, H() / 2 + yOff);
+        yOff += S(24);
+
         // Name entry
         if (enteringName) {
             ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -3133,8 +3351,30 @@ function updateUI() {
 }
 
 // ── Game Loop ────────────────────────────────────────────────
-function gameLoop() {
-    update();
+function gameLoop(timestamp) {
+    if (lastFrameTime === null) lastFrameTime = timestamp;
+
+    let deltaMs = timestamp - lastFrameTime;
+    lastFrameTime = timestamp;
+
+    // Clamp giant gaps (tab inactive, debugger pause) so gameplay doesn't fast-forward.
+    if (!Number.isFinite(deltaMs) || deltaMs < 0 || deltaMs > 250) {
+        deltaMs = FIXED_TIMESTEP_MS;
+    }
+
+    frameAccumulator += deltaMs;
+
+    let steps = 0;
+    while (frameAccumulator >= FIXED_TIMESTEP_MS && steps < MAX_CATCH_UP_STEPS) {
+        update();
+        frameAccumulator -= FIXED_TIMESTEP_MS;
+        steps++;
+    }
+
+    if (steps === MAX_CATCH_UP_STEPS) {
+        frameAccumulator = 0;
+    }
+
     draw();
     requestAnimationFrame(gameLoop);
 }
@@ -3208,7 +3448,7 @@ loadAssets((loaded, total) => {
     console.log('Assets loaded:', Object.keys(ASSETS).length, '/', Object.keys(ASSET_LIST).length);
     generateStars();
     fetchGlobalLeaderboard(); // Load global scores on startup
-    gameLoop();
+    requestAnimationFrame(gameLoop);
 });
 
 // Regenerate stars on resize
